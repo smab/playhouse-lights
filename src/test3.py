@@ -3,9 +3,9 @@ import random
 import sys
 import time
 
-import hue
+import playhouse
 
-bridge = hue.Bridge(next(iter(hue.discover().values())), "221e0ffa3cc16d37b186966187aa653")
+bridge = playhouse.Bridge(next(iter(playhouse.discover().values())), "newdeveloper")
 print("Current lights:", bridge.get_lights())
 print(bridge.search_lights())
 
