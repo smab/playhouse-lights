@@ -73,13 +73,11 @@ class LightGrid:
         self.bridges = {}
         self.username = username
         self.buffered = buffered        
-        def default():
-            return copy.copy(defaults)
-        self.buffer = collections.defaultdict(default)
+        self.buffer = collections.defaultdict(dict)
         
         for mac, ip in ip_addresses.items():
-            self.bridges[mac] = Bridge(ip, username, defaults={})
-        self.grid = copy.deepcopy(grid)
+            self.bridges[mac] = Bridge(ip, username, defaults)
+        self.grid = grid
         self.height = len(self.grid)
         self.width = max([len(x) for x in self.grid])
         
@@ -142,10 +140,12 @@ def discover(attempts=2, timeout=2):
         sock.sendto(message, ("239.255.255.250", 1900))
         while True:
             try:
+                
                 response = io.BytesIO(sock.recv(1024))
                 response.makefile = lambda *args, **kwargs: response
                 header = http.client.HTTPResponse(response)
                 header.begin()
+                print(header.status)
                 if header.status == 200:
                     locations.add(header.getheader('location'))
             except socket.timeout:
