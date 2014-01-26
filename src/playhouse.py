@@ -10,22 +10,29 @@ from xml.etree import ElementTree
 
 class Bridge:
     
-    def __init__(self, ip, username, defaults={"transitiontime": 0}):
+    def __init__(self, ip, username=None, defaults={"transitiontime": 0}):
         self.defaults = defaults
         self.username = username
         self.bridge = http.client.HTTPConnection(ip)
-        self.get_info()
+        self.update_info()
         
         
     def set_defaults(self, defaults):
         self.defaults = defaults
     
-    def send_request(self, method, url, body=None):
+    def send_raw(self, method, url, body=None):
         if body is not None:
             body = json.dumps(body)
         
-        self.bridge.request(method, "/api/{}{}".format(self.username, url), body)
+        self.bridge.request(method, url, body)
         return json.loads(self.bridge.getresponse().read().decode('utf-8'))
+    
+    def send_request(self, method, url, body=None):
+        user = self.username
+        if user is None:
+            user = "none"
+        
+        return self.send_raw(method, "/api/{}{}".format(user, url), body)
     
     def _set_state(self, url, args):
         defs = self.defaults.copy()
@@ -52,13 +59,34 @@ class Bridge:
     def search_lights(self):
         return self.send_request("POST", "/lights")
     
-    def get_info(self):
+    def set_username(self, username):
+        self.username = username
+        self.update_info()
+    
+    def create_user(self, devicetype, username=None):
+        body = {'devicetype': devicetype}
+        if username is not None:
+            body['username'] = username
+        res = self.send_raw("POST", "/api", body)[0]
+        if "error" in res:
+            raise Exception(res['error']['description'])
+        else:
+            self.username = res['success']['username']
+            self.update_info()
+    
+    def update_info(self):
         info = self.send_request("GET", "/config")
-        self.ipaddress = info['ipaddress']
-        self.gateway = info['gateway']
-        self.netmask = info['netmask']
-        self.name = info['name']
-        self.mac = info['mac']
+        
+        if self.username is None or 'mac' not in info:
+            self.logged_in = False
+        else:
+            self.logged_in = True
+        
+        self.ipaddress = info.get('ipaddress', None)
+        self.gateway = info.get('gateway', None)
+        self.netmask = info.get('netmask', None)
+        self.name = info.get('name', None)
+        self.mac = info.get('mac', None)
 
 
 class LightGrid:
