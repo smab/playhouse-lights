@@ -73,6 +73,9 @@ class Bridge:
     def search_lights(self):
         return self.send_request("POST", "/lights")
     
+    def get_bridge_info(self):
+        return self.send_request("GET", "/")
+    
     def set_username(self, username):
         self.username = username
         self.update_info()
