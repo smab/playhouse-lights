@@ -14,6 +14,20 @@ class Bridge:
         self.defaults = defaults
         self.username = username
         self.bridge = http.client.HTTPConnection(ip)
+        
+        try:
+            self.bridge.request("GET", "/description.xml")
+            res = self.bridge.getresponse()
+            if res.status != 200:
+                raise Exception()
+            et, ns = parse_description(res)
+            desc = et.find('./default:device/default:modelDescription', namespaces=ns)
+            if desc is None or desc.text != "Philips hue Personal Wireless Lighting":
+                raise Exception()
+            self.serial_number = et.find('./default:device/default:serialNumber', namespaces=ns).text
+        except:
+            raise Exception("{}: not a Philips Hue bridge".format(ip))
+        
         self.update_info()
         
         
@@ -90,21 +104,24 @@ class Bridge:
 
 
 class LightGrid:
-    def __init__(self, username, grid, ip_addresses, buffered=False, defaults = {}):
+    def __init__(self, usernames, grid, ip_addresses, buffered=False, defaults = {}):
         """Create a new light grid-
         
-        username - Username to the Hue bridges
+        username - Map of serial number -> username pairs
         grid - A list of list of tuples (mac address, light). Maps grid pixels to specific lamps belonging to specific bridges. The top list contains pixel rows from the highest to the lowest. Each pixel row is a list containg the tuples from the left-most pixel in the row to the right-most
         ip-addresses - Maps Hue bridge id's to IP addresses
         """
         self.defaults = defaults
         self.bridges = {}
-        self.username = username
+        self.usernames = usernames
         self.buffered = buffered        
         self.buffer = collections.defaultdict(dict)
         
-        for mac, ip in ip_addresses.items():
-            self.bridges[mac] = Bridge(ip, username, defaults)
+        for ip in ip_addresses:
+            bridge = Bridge(ip, defaults=defaults)
+            self.bridges[bridge.serial_number] = bridge
+            if bridge.serial_number in usernames:
+                bridge.set_username(usernames[bridge.serial_number])
         self.grid = grid
         self.height = len(self.grid)
         self.width = max([len(x) for x in self.grid])
@@ -181,14 +198,25 @@ def discover(attempts=2, timeout=2):
     
     bridges = {}
     for loc in locations:
-        root = ElementTree.parse(urllib.request.urlopen(loc)).getroot()
-        NS = "{urn:schemas-upnp-org:device-1-0}"
-        if root.find("./{ns}device/{ns}modelName".format(ns=NS)).text == 'Philips hue bridge 2012':
-            mac = root.find("./{ns}device/{ns}serialNumber".format(ns=NS)).text
-            url = urllib.parse.urlparse(root.find("./{ns}URLBase".format(ns=NS)).text)
+        et, ns = parse_description(urllib.request.urlopen(loc))
+        if et.find("./default:device/default:modelDescription", namespaces=ns).text == 'Philips hue Personal Wireless Lighting':
+            mac = et.find("./default:device/default:serialNumber", namespaces=ns).text
+            url = urllib.parse.urlparse(et.find("./default:URLBase", namespaces=ns).text)
             bridges[mac] = url.netloc
     
     return bridges
+
+def parse_description(f):
+    root = None
+    namespaces = {}
+    for event, elem in ElementTree.iterparse(f, ("start", "start-ns")):
+        if event == "start-ns":
+            namespaces[elem[0] if elem[0] != '' else 'default'] = elem[1]
+        elif event == "start":
+            if root is None:
+                root = elem
+    
+    return ElementTree.ElementTree(root), namespaces
 
 def rgb2xy(red, green, blue):
 
