@@ -20,6 +20,7 @@ grid = [
 ]
 
 ips = {"130.237.228.161:80"}#, "130.237.228.58:80", "130.237.228.213:80"}
+buttons = [[None] * 3 for _ in range(3)]
 
 lg = playhouse.LightGrid(usernames, grid, ips, buffered=False)
 
@@ -34,6 +35,7 @@ def main():
     window.setWindowTitle("Tic tac toe")
     
     widget = QtGui.QWidget()
+    widget.setStyleSheet("QPushButton { color: black }")
     layout = QtGui.QGridLayout()
     
     for row in range(3):
@@ -44,7 +46,10 @@ def main():
                 return action
             
             button = QtGui.QPushButton("{}:{}".format(row, column))
+            button.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Expanding)
             button.clicked.connect(clicked(row, column))
+            button.setStyleSheet("QPushButton { background-color: white }")
+            buttons[row][column] = button
             layout.addWidget(button, row, column)
     
     widget.setLayout(layout)
@@ -59,27 +64,34 @@ def main():
 
 player = 0
 colors = [0, 45000]
+button_colors = ["red", "blue"]
 
 board = [[-1, -1, -1],
          [-1, -1, -1],
          [-1, -1, -1]]
 
+timer_running = False
+
 def reset():
-    global player, board
+    global player, board, timer_running
+    timer_running = False
+    
     for i in range(3):
         for j in range(3):
             lg.set_state(i, j, hue=0, sat=0)
+            buttons[j][i].setStyleSheet("QPushButton { background-color: white }")
     board = [[-1, -1, -1],
              [-1, -1, -1],
              [-1, -1, -1]]
     player = 0
 
 def do_turn(x, y):
-    global player
-    if board[y][x] != -1:
+    global player, timer_running
+    if board[y][x] != -1 or timer_running:
         return
     board[y][x] = player
     lg.set_state(x, y, hue=colors[player], sat=255)
+    buttons[y][x].setStyleSheet("QPushButton {{ background-color: {} }}".format(button_colors[player]))
     
     winner_lamps = set()
     for configuration in [[(y, 0), (y, 1), (y, 2)],
@@ -90,11 +102,12 @@ def do_turn(x, y):
             winner_lamps.update(configuration)
     
     if len(winner_lamps) > 0:
-        time.sleep(0.5)
-        for i, j in winner_lamps:
-            lg.set_state(j, i, alert="lselect")
-        time.sleep(5)
-        reset()
+        def set_alert():
+            for i, j in winner_lamps:
+                lg.set_state(j, i, alert="lselect")
+        QtCore.QTimer.singleShot(500, set_alert)
+        timer_running = True
+        QtCore.QTimer.singleShot(5000, reset)
         return
     if all(all(i != -1 for i in j) for j in board):
         reset()
