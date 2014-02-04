@@ -3,31 +3,32 @@ import random
 import sys
 import time
 
+import http.client
+import tornado.escape
+
 from PyQt4 import QtGui, QtCore
 
 import playhouse
 
-usernames = {
-    "001788182e78": "a0e48e11876b8971eb694151aba16ab",
-    "00178811f9c2": "24f99ac4b92c8af22ea52ec3d6c3e37",
-    "001788182c73": "1c9cdb15142f458731745fe11189ab3"
-}
 
-grid = [
-    [("001788182e78", 3), ("001788182e78", 1), ("001788182e78", 2)],
-    [("00178811f9c2", 1), ("00178811f9c2", 3), ("00178811f9c2", 2)],
-    [("001788182c73", 1), ("001788182c73", 2), ("001788182c73", 3)]
-]
-
-ips = {"130.237.228.161:80", "130.237.228.58:80", "130.237.228.213:80"}
 buttons = [[None] * 3 for _ in range(3)]
 
-lg = playhouse.LightGrid(usernames, grid, ips, buffered=False)
+buffer = []
+def set_state(x, y, **args):
+    global buffer
+    buffer += [{'x':x, 'y':y, 'change':args}]
+
+def commit():
+    global buffer
+    conn = http.client.HTTPConnection("localhost:4711")
+    conn.request("POST", "/lights", tornado.escape.json_encode(buffer))
+    buffer = []
 
 def main():
     for i in range(3):
         for j in range(3):
-            lg.set_state(i, j, sat=0, hue=0, bri=255)
+            set_state(i, j, sat=0, hue=0, bri=0)
+    commit()
     
     app = QtGui.QApplication(sys.argv)
     
@@ -78,8 +79,9 @@ def reset():
     
     for i in range(3):
         for j in range(3):
-            lg.set_state(i, j, hue=0, sat=0)
+            set_state(i, j, hue=0, sat=0)
             buttons[j][i].setStyleSheet("QPushButton { background-color: white }")
+    commit()
     board = [[-1, -1, -1],
              [-1, -1, -1],
              [-1, -1, -1]]
@@ -90,7 +92,8 @@ def do_turn(x, y):
     if board[y][x] != -1 or timer_running:
         return
     board[y][x] = player
-    lg.set_state(x, y, hue=colors[player], sat=255)
+    set_state(x, y, hue=colors[player], sat=255)
+    commit()
     buttons[y][x].setStyleSheet("QPushButton {{ background-color: {} }}".format(button_colors[player]))
     
     winner_lamps = set()
@@ -104,7 +107,8 @@ def do_turn(x, y):
     if len(winner_lamps) > 0:
         def set_alert():
             for i, j in winner_lamps:
-                lg.set_state(j, i, alert="lselect")
+                set_state(j, i, alert="lselect")
+            commit()
         QtCore.QTimer.singleShot(500, set_alert)
         timer_running = True
         QtCore.QTimer.singleShot(5000, reset)
