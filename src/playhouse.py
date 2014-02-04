@@ -156,7 +156,11 @@ class LightGrid:
 #                    del self.buffer[cell][k]
         if not self.buffered:
             self.commit()
-            
+    
+    def set_all(self, **args):
+        for bridge in self.bridges.values():
+            bridge.set_group(0, **args)
+    
     def commit(self):
         """Commit saved state changes to the lamps"""
         for k, v in self.buffer.items():

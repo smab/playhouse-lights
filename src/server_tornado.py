@@ -1,7 +1,45 @@
+import tornado.escape
 import tornado.ioloop
 import tornado.web
 
 import playhouse
+
+
+def return_json(func):
+    def new_func(self, *args, **kwargs):
+        self.set_header("Content-Type", "application/json")
+        data = func(self, *args, **kwargs)
+        self.write(tornado.escape.json_encode(data))
+    return new_func
+
+def json_parser(func):
+    def new_post(self, *args, **kwargs):
+        try:
+            data = tornado.escape.json_decode(self.request.body)
+            return func(self, data, *args, **kwargs)
+        except UnicodeDecodeError:
+            return {"state": "error", "errorcode": 1, "errormessage": "couldn't decode as UTF-8"}
+        except ValueError:
+            return {"state": "error", "errorcode": 1, "errormessage": "invalid JSON"}
+    return new_post
+
+
+class LightsHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data):
+        print("Request was", data)
+        for light in data:
+            grid.set_state(light['x'], light['y'], **light['change'])
+            pass
+        return {"state": "success"}
+
+class LightsAllHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data):
+        grid.set_all(**data)
+        return {"state": "success"}
 
 class MainHandler(tornado.web.RequestHandler):
     def post(self):
@@ -39,6 +77,8 @@ class MainHandler(tornado.web.RequestHandler):
 
 application = tornado.web.Application([
     (r"/display", MainHandler),
+    (r'/lights', LightsHandler),
+    (r'/lights/all', LightsAllHandler),
 ])
 
 

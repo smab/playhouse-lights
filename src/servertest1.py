@@ -2,7 +2,7 @@
 import http.client
 import json
 
-client = http.client.HTTPConnection("localhost", 8081)
-client.request("POST", "/lights", '[{"x": 1, "y": 1, "change": {"hue": 0}}]')
+client = http.client.HTTPConnection("localhost", 4711)
+client.request("POST", "/lights/all", '{"hue": 0, "bri": 0, "sat": 255}')
 
 print(client.getresponse().read())
