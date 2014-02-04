@@ -2,6 +2,7 @@ import tornado.escape
 import tornado.ioloop
 import tornado.web
 
+import errorcodes
 import playhouse
 
 
@@ -18,9 +19,9 @@ def json_parser(func):
             data = tornado.escape.json_decode(self.request.body)
             return func(self, data, *args, **kwargs)
         except UnicodeDecodeError:
-            return {"state": "error", "errorcode": 1, "errormessage": "couldn't decode as UTF-8"}
+            return {"state": "error", "errorcode": errorcodes.NOT_UNICODE, "errormessage": errorcodes.NOT_UNICODE_S}
         except ValueError:
-            return {"state": "error", "errorcode": 1, "errormessage": "invalid JSON"}
+            return {"state": "error", "errorcode": errorcodes.INVALID_JSON, "errormessage": errorcodes.INVALID_JSON_S}
     return new_post
 
 
