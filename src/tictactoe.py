@@ -8,18 +8,18 @@ from PyQt4 import QtGui, QtCore
 import playhouse
 
 usernames = {
-    "001788182e78": "25116fda765dc973fae9b4611ec2fb3",
-    "00178811f9c2": "newdeveloper",
-    "001788182c73": "3PeT4zaFlqOtf2Pr"
+    "001788182e78": "a0e48e11876b8971eb694151aba16ab",
+    "00178811f9c2": "24f99ac4b92c8af22ea52ec3d6c3e37",
+    "001788182c73": "1c9cdb15142f458731745fe11189ab3"
 }
 
 grid = [
-    [("00178811f9c2", 9), ("00178811f9c2", 4), ("00178811f9c2", 7)],
-    [("00178811f9c2", 5), ("00178811f9c2", 6), ("00178811f9c2", 8)],
-    [("00178811f9c2", 2), ("00178811f9c2", 3), ("00178811f9c2", 1)]
+    [("001788182e78", 3), ("001788182e78", 1), ("001788182e78", 2)],
+    [("00178811f9c2", 1), ("00178811f9c2", 3), ("00178811f9c2", 2)],
+    [("001788182c73", 1), ("001788182c73", 2), ("001788182c73", 3)]
 ]
 
-ips = {"130.237.228.161:80"}#, "130.237.228.58:80", "130.237.228.213:80"}
+ips = {"130.237.228.161:80", "130.237.228.58:80", "130.237.228.213:80"}
 buttons = [[None] * 3 for _ in range(3)]
 
 lg = playhouse.LightGrid(usernames, grid, ips, buffered=False)
@@ -27,7 +27,7 @@ lg = playhouse.LightGrid(usernames, grid, ips, buffered=False)
 def main():
     for i in range(3):
         for j in range(3):
-            lg.set_state(i, j, sat=0, hue=0, bri=0)
+            lg.set_state(i, j, sat=0, hue=0, bri=255)
     
     app = QtGui.QApplication(sys.argv)
     
