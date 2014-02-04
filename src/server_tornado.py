@@ -32,7 +32,7 @@ class LightsHandler(tornado.web.RequestHandler):
         print("Request was", data)
         for light in data:
             grid.set_state(light['x'], light['y'], **light['change'])
-            pass
+        grid.commit()
         return {"state": "success"}
 
 class LightsAllHandler(tornado.web.RequestHandler):
@@ -40,6 +40,7 @@ class LightsAllHandler(tornado.web.RequestHandler):
     @json_parser
     def post(self, data):
         grid.set_all(**data)
+        grid.commit()
         return {"state": "success"}
 
 class MainHandler(tornado.web.RequestHandler):
@@ -89,7 +90,7 @@ def init_lightgrid():
         config["grid"] = [ [ (x[0], x[1]) for x in row ] for row in config["grid"] ]
         print(config)
 
-    return playhouse.LightGrid(config["usernames"], config["grid"], config["ips"], buffered=False) 
+    return playhouse.LightGrid(config["usernames"], config["grid"], config["ips"], buffered=True) 
 
 
 
