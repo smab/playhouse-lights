@@ -1,0 +1,94 @@
+﻿JSON-API
+Standardport: 4711
+
+
+I stil med Hue-API:t
+* Olika URL:er beroende på funktion
+* POST och GET
+Nödvändiga funktioner:
+* Söka efter brygga
+* Lägga till brygga manuellt
+* Lista bryggor och lampor
+* Ändra lampor
+
+
+Felmeddelanden:
+Response:
+{"state": "error", "errorcode": "ERROR_CODE", "errormessage": "human-readable error message"}
+
+
+Standardfelmeddelanden:
+NOT_UNICODE -- couldn't decode as UTF-8
+INVALID_JSON -- invalid JSON
+NOT_IMPLEMENTED -- feature not implemented yet
+
+
+Se https://github.com/smab/playhouse-lights/blob/master/src/errorcodes.py för komplett lista
+
+
+Om inget annat anges resulterar ett lyckat anrop i svaret {"state": "success"}
+
+API (? efter attributnamn = optional):
+~GET -- /lights
+
+
+
+POST /lights -- ändra state för lampor
+Request:
+[
+ {
+    "x": x-koordinat för lampa,
+    "y": y-koordinat för lampa,
+    "change": <hue-state-ändringar>
+  },
+  ...
+]
+
+Felmeddelanden:
+INVALID_STATE -- at least one state object was invalid
+INVALID_ATTRIBUTE -- state object contains non-existent attributes
+INVALID_VALUE -- state object contains invalid values
+
+
+{"state": "error", "errorcode": "INVALID_STATE", "errormessage": "at least one state object was invalid", "invalid_states": [<state1 + "errorcode": "INVALID_ATTRIBUTE", "errormessage": ...>, ...]}
+
+POST /lights/all -- sätt varje lampa till ett visst state
+Request:
+<hue-state-ändringar>
+Felmeddelanden:
+INVALID_ATTRIBUTE
+INVALID_VALUE
+
+GET /bridges -- få en lista på bryggor (IP, mac, etc)
+Request: ignorerad
+Response: {
+   [MAC]: {
+       "ip": ...,
+       "lights": ??? (siffra eller lista med nummer+namn?)
+   },
+   ...
+}
+POST /bridges/add -- lägg till brygga med IP (optionally användarnamn)
+Request: {"ip": ..., "username?": ...}
+Response: {"state": "success", "mac": ..., "valid_username": true/false}
+Felmeddelanden:
+INVALID_IP -- "couldn't connect to ip"
+NOT_HUE_BRIDGE -- "device is not a Hue bridge"
+
+
+
+POST /bridges/[MAC] -- ändra inställningar för brygga (främst användarnamn)
+POST /bridges/search -- sätt igång UPnP-discovery (blockera tills färdigt?)
+
+
+<hue-state-ändringar> = {
+  "on?": true/false,
+  "bri?": 0-255,
+  "hue?": 0-65535,
+  "sat?": 0-255,
+  "xy?": [0.0-1.0, 0.0-1.0],
+  "ct?": 153-500,
+  "alert?": "none"/"select"/"lselect",
+  "effect?": "none"/"colorloop",
+  "transitiontime?": uint16 (multipel av 100 ms - default: 4)
+}
