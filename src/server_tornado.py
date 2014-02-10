@@ -52,14 +52,13 @@ class BridgesHandler(tornado.web.RequestHandler):
     @return_json
     def get(self):
         res = {"state": "success"}
-        print(grid)
         for mac, bridge in grid.bridges.items():
-            b = {}
-            b['ip'] = bridge.ipaddress
-            b['username'] = bridge.username
-            b['valid_username'] = bridge.logged_in
-            b['lights'] = len(bridge.get_lights()) if bridge.logged_in else -1
-            res[mac] = b
+            res[mac] = {
+                "ip": bridge.ipaddress,
+                "username": bridge.username,
+                "valid_username": bridge.logged_in,
+                "lights": len(bridge.get_lights()) if bridge.logged_in else -1
+            }
         return res
 
 class BridgesAddHandler(tornado.web.RequestHandler):
@@ -83,6 +82,15 @@ class BridgesMacHandler(tornado.web.RequestHandler):
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         grid.bridges[mac].set_username(data['username'])
         return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
+
+    @return_json
+    def delete(self, mac):
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        
+        del grid.bridges[mac]
+        return {"state": "success"}
+
 
 event = threading.Event()
 new_bridges = []
