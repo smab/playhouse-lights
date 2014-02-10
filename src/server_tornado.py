@@ -1,4 +1,9 @@
+
+import threading
+import traceback
+
 import tornado.escape
+import tornado.gen
 import tornado.ioloop
 import tornado.web
 
@@ -19,9 +24,9 @@ def json_parser(func):
             data = tornado.escape.json_decode(self.request.body)
             return func(self, data, *args, **kwargs)
         except UnicodeDecodeError:
-            return {"state": "error", "errorcode": errorcodes.NOT_UNICODE, "errormessage": errorcodes.NOT_UNICODE_S}
+            return errorcodes.NOT_UNICODE
         except ValueError:
-            return {"state": "error", "errorcode": errorcodes.INVALID_JSON, "errormessage": errorcodes.INVALID_JSON_S}
+            return errorcodes.INVALID_JSON
     return new_post
 
 
@@ -43,44 +48,81 @@ class LightsAllHandler(tornado.web.RequestHandler):
         grid.commit()
         return {"state": "success"}
 
-class MainHandler(tornado.web.RequestHandler):
-    def post(self):
-        self.get()
-
+class BridgesHandler(tornado.web.RequestHandler):
+    @return_json
     def get(self):
-        global grid
+        res = {"state": "success"}
+        print(grid)
+        for mac, bridge in grid.bridges.items():
+            b = {}
+            b['ip'] = bridge.ipaddress
+            b['username'] = bridge.username
+            b['valid_username'] = bridge.logged_in
+            b['lights'] = len(bridge.get_lights()) if bridge.logged_in else -1
+            res[mac] = b
+        return res
 
-        self.set_header("Content-Type", "text/plain")
+class BridgesAddHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data):
+        try:
+            username = data.get("username", None)
+            bridge = grid.add_bridge(data['ip'], username)
+        except playhouse.BridgeAlreadyAddedException:
+            return errorcodes.BRIDGE_ALREADY_ADDED
+        except:
+            return errorcodes.BRIDGE_NOT_FOUND.format(ip=data['ip'])
+        return {"state": "success", "mac": bridge.serial_number, "valid_username": bridge.logged_in}
 
-        json = tornado.escape.json_decode(self.get_argument("json"))
-        print("Received: %s" % json)
+class BridgesMacHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data, mac):
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        grid.bridges[mac].set_username(data['username'])
+        return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
 
-        if "action" in json:
-            action = json["action"]
+event = threading.Event()
+new_bridges = []
 
-            if action == "set_state":
-                self.write("set_state\n")
-                self.write("x: %d\n" % json["x"])
-                self.write("y: %d\n" % json["y"])
-                self.write("body: %s\n" % json["body"])
-                
-                grid.set_state(json["x"], json["y"], **json["body"])
-            elif action == "commit":
-                self.write("commit\n")
+class BridgesSearchHandler(tornado.web.RequestHandler):
+    @return_json
+    def post(self):
+        if event.is_set():
+            return errorcodes.CURRENTLY_SEARCHING
+        
+        def myfunc():
+            global new_bridges
+            event.set()
+            print("running")
+            new_bridges = playhouse.discover()
+            print("finished")
+            event.clear()
+        thread = threading.Thread()
+        thread.run = myfunc
+        thread.start()
+        
+        return {"state": "success"}
 
-                grid.commit()
-            else:
-                self.set_status(501)
-                self.write("Error: Unknown action (%s)\n" % action)
-        else:
-            self.set_status(400)
-            self.write("Error: No action specified!\n")
+class BridgesSearchResultHandler(tornado.web.RequestHandler):
+    @return_json
+    def get(self):
+        if event.is_set():
+            return errorcodes.CURRENTLY_SEARCHING
+        
+        return {"state": "success", "bridges": {b.serial_number: b.ipaddress for b in new_bridges}}
 
 
 application = tornado.web.Application([
-    (r"/display", MainHandler),
     (r'/lights', LightsHandler),
     (r'/lights/all', LightsAllHandler),
+    (r'/bridges', BridgesHandler),
+    (r'/bridges/add', BridgesAddHandler),
+    (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
+    (r'/bridges/search', BridgesSearchHandler),
+    (r'/bridges/search/result', BridgesSearchResultHandler)
 ])
 
 
@@ -90,7 +132,14 @@ def init_lightgrid():
         config["grid"] = [ [ (x[0], x[1]) for x in row ] for row in config["grid"] ]
         print(config)
 
-    return playhouse.LightGrid(config["usernames"], config["grid"], config["ips"], buffered=True) 
+    grid = playhouse.LightGrid(config["usernames"], config["grid"], buffered=True)
+    for ip in config["ips"]:
+        try:
+            grid.add_bridge(ip)
+        except:
+            traceback.print_exc()
+            print("Couldn't add ip", ip)
+    return grid
 
 
 

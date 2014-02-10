@@ -1,29 +1,45 @@
+
+import collections
 import copy
 import http.client
 import io
 import json
 import socket
+import traceback
 import urllib.parse
 import urllib.request
-import collections
 from xml.etree import ElementTree
+
+import tornado
+import tornado.httpclient
+
+
+class BridgeAlreadyAddedException(Exception):
+    pass
+
 
 class Bridge:
     
     def __init__(self, ip, username=None, defaults={"transitiontime": 0}):
         self.defaults = defaults
         self.username = username
-        self.bridge = http.client.HTTPConnection(ip)
+        self.ipaddress = ip
+        self.bridge = http.client.HTTPConnection(ip, timeout=1)
         
         try:
+            if self.send_request("GET", "/config")['name'] != "Philips hue":
+                raise Exception()
+            
             self.bridge.request("GET", "/description.xml")
             res = self.bridge.getresponse()
             if res.status != 200:
                 raise Exception()
+            
             et, ns = parse_description(res)
             desc = et.find('./default:device/default:modelDescription', namespaces=ns)
-            if desc is None or desc.text != "Philips hue Personal Wireless Lighting":
+            if desc.text != "Philips hue Personal Wireless Lighting":
                 raise Exception()
+            
             self.serial_number = et.find('./default:device/default:serialNumber', namespaces=ns).text
         except:
             raise Exception("{}: not a Philips Hue bridge".format(ip))
@@ -99,7 +115,6 @@ class Bridge:
         else:
             self.logged_in = True
         
-        self.ipaddress = info.get('ipaddress', None)
         self.gateway = info.get('gateway', None)
         self.netmask = info.get('netmask', None)
         self.name = info.get('name', None)
@@ -107,7 +122,7 @@ class Bridge:
 
 
 class LightGrid:
-    def __init__(self, usernames, grid, ip_addresses, buffered=False, defaults = {}):
+    def __init__(self, usernames={}, grid=[], buffered=False, defaults = {}):
         """Create a new light grid-
         
         username - Map of serial number -> username pairs
@@ -120,14 +135,12 @@ class LightGrid:
         self.buffered = buffered        
         self.buffer = collections.defaultdict(dict)
         
-        for ip in ip_addresses:
+        """for ip in ip_addresses:
             bridge = Bridge(ip, defaults=defaults)
             self.bridges[bridge.serial_number] = bridge
             if bridge.serial_number in usernames:
-                bridge.set_username(usernames[bridge.serial_number])
-        self.grid = grid
-        self.height = len(self.grid)
-        self.width = max([len(x) for x in self.grid])
+                bridge.set_username(usernames[bridge.serial_number])"""
+        self.set_grid(grid)
         
         #self.state = {}
         #self._synchronize_state()
@@ -138,6 +151,22 @@ class LightGrid:
 #            for k, v in data["lights"].items():
 #                self.state[(mac, int(k))] = v["state"]
                     
+    
+    def add_bridge(self, ip_address, username=None):
+        bridge = Bridge(ip_address, username, self.defaults)
+        if bridge.serial_number in self.bridges:
+            raise BridgeAlreadyAddedException()
+        
+        if username is None and bridge.serial_number in self.usernames:
+            bridge.set_username(self.usernames[bridge.serial_number])
+        self.bridges[bridge.serial_number] = bridge
+        return bridge
+    
+    def set_grid(self, grid):
+        self.grid = grid
+        self.height = len(self.grid)
+        self.width = max([len(x) for x in self.grid]) if self.height > 0 else 0
+    
     def set_state(self, x, y, **args):
         """Set the state for a specific lamp. If this grid is buffered, the state will not be sent to the lamp directly.
         
@@ -171,9 +200,7 @@ class LightGrid:
         self.buffer.clear()
                 
 
-        
-                        
-                   
+
 def discover(attempts=2, timeout=2):
     socket.setdefaulttimeout(timeout)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -192,24 +219,29 @@ def discover(attempts=2, timeout=2):
         sock.sendto(message, ("239.255.255.250", 1900))
         while True:
             try:
-                
-                response = io.BytesIO(sock.recv(1024))
+                raw, (address, port) = sock.recvfrom(1024)
+                response = io.BytesIO(raw)
                 response.makefile = lambda *args, **kwargs: response
                 header = http.client.HTTPResponse(response)
                 header.begin()
                 print(header.status)
-                if header.status == 200:
-                    locations.add(header.getheader('location'))
+                if header.status == 200 and header.getheader('location') is not None:
+                    locations.add(address)
             except socket.timeout:
                 break
     
-    bridges = {}
+    bridges = []
     for loc in locations:
-        et, ns = parse_description(urllib.request.urlopen(loc))
+        try:
+            bridges.append(Bridge(loc))
+        except:
+            traceback.print_exc()
+            pass # invalid bridge
+        """et, ns = parse_description(urllib.request.urlopen(loc))
         if et.find("./default:device/default:modelDescription", namespaces=ns).text == 'Philips hue Personal Wireless Lighting':
             mac = et.find("./default:device/default:serialNumber", namespaces=ns).text
             url = urllib.parse.urlparse(et.find("./default:URLBase", namespaces=ns).text)
-            bridges[mac] = url.netloc
+            bridges[mac] = url.netloc"""
     
     return bridges
 
