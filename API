@@ -20,6 +20,7 @@ Response:
 Standardfelmeddelanden:
 NOT_UNICODE -- couldn't decode as UTF-8
 INVALID_JSON -- invalid JSON
+INVALID_FORMAT -- the JSON was in an unexpected format
 NOT_IMPLEMENTED -- feature not implemented yet
 
 
@@ -62,9 +63,12 @@ INVALID_VALUE
 GET /bridges -- få en lista på bryggor (IP, mac, etc)
 Request: ignorerad
 Response: {
+    "state": success,
    [MAC]: {
        "ip": ...,
-       "lights": ??? (siffra eller lista med nummer+namn?)
+        "username": String (null om inget användarnamn satt),
+        "valid_username": true/false,
+       "lights": int (-1 om valid_username är false)
    },
    ...
 }
@@ -72,13 +76,40 @@ POST /bridges/add -- lägg till brygga med IP (optionally användarnamn)
 Request: {"ip": ..., "username?": ...}
 Response: {"state": "success", "mac": ..., "valid_username": true/false}
 Felmeddelanden:
-INVALID_IP -- "couldn't connect to ip"
-NOT_HUE_BRIDGE -- "device is not a Hue bridge"
-
-
+BRIDGE_NOT_FOUND -- "couldn't find a Hue bridge at given address '{}'"
+BRIDGE_ALREADY_ADDED -- "bridge has already been added to the server"
 
 POST /bridges/[MAC] -- ändra inställningar för brygga (främst användarnamn)
-POST /bridges/search -- sätt igång UPnP-discovery (blockera tills färdigt?)
+Request: {"username": ...}
+Response: {"state": "success", "username": ..., "valid_username": true/false}
+Felmeddelanden:
+NO_SUCH_MAC -- "the server does not know of a bridge with the MAC address '{mac}'"
+
+POST /bridges/search -- sätt igång UPnP-discovery (asynkron)
+Request: ignoreras
+Response: {"state": "success"}
+
+
+Felmeddelanden:
+CURRENTLY_SEARCHING -- "currently searching for bridges"
+
+
+POST /bridges/search/result -- hämta resultat från UPnP-discovery. om /bridges/search ej har anropats ännu kommer "bridges" att vara en tom map
+Request: ignoreras
+Response: {"state": "success", "bridges": {mac1: ip1, mac2: ip2, ...}}
+
+
+Felmeddelanden:
+CURRENTLY_SEARCHING
+
+
+DELETE /bridges/[MAC] -- säg åt servern att glömma en brygga
+Request: ignoreras
+Response: {"state": "success"}
+
+
+Felmeddelanden:
+NO_SUCH_MAC
 
 
 <hue-state-ändringar> = {
