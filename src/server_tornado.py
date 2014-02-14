@@ -90,6 +90,8 @@ class BridgesMacHandler(tornado.web.RequestHandler):
         
         del grid.bridges[mac]
         return {"state": "success"}
+        
+
 
 
 event = threading.Event()
@@ -121,6 +123,47 @@ class BridgesSearchResultHandler(tornado.web.RequestHandler):
             return errorcodes.CURRENTLY_SEARCHING
         
         return {"state": "success", "bridges": {b.serial_number: b.ipaddress for b in new_bridges}}
+        
+        
+class BridgeLampSearchHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data, mac):        
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        grid.bridges[mac].search_lights()
+        return {"state": "success"}
+        
+class GridHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    def post(self, data):
+        try:
+            g = []
+            for d_row in data:
+                row = []
+                for d_lamp in d_row:
+                    lamp = (d_lamp["mac"],d_lamp["lamp"])
+                    row.append(lamp)
+                g.append(row)              
+            grid.set_grid(g)
+            return {"state": "success"}
+        except UnicodeDecodeError:
+            return errorcodes.NOT_UNICODE
+        #except playhouse.UnknownBridgeException as e:
+        #    return errorcodes.NO_SUCH_MAC.format(mac=e.mac)
+        except ValueError:
+            return errorcodes.INVALID_JSON
+            
+    @return_json    
+    def get(self):
+        data = []
+        for row in grid.grid:
+            row_data = []
+            for (mac, lamp) in row:
+                row_data.append({"mac":mac,"lamp":lamp})
+            data.append(row_data)
+        return data
 
 
 application = tornado.web.Application([
@@ -129,8 +172,10 @@ application = tornado.web.Application([
     (r'/bridges', BridgesHandler),
     (r'/bridges/add', BridgesAddHandler),
     (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
+    (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
     (r'/bridges/search', BridgesSearchHandler),
-    (r'/bridges/search/result', BridgesSearchResultHandler)
+    (r'/bridges/search/result', BridgesSearchResultHandler),
+    (r'/grid', GridHandler)
 ])
 
 

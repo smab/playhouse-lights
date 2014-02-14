@@ -16,6 +16,11 @@ import tornado.httpclient
 
 class BridgeAlreadyAddedException(Exception):
     pass
+    
+    
+class UnknownBridgeException(Exception):
+    def __this__(self, mac):
+        self.mac = mac
 
 
 class Bridge:
@@ -163,6 +168,11 @@ class LightGrid:
         return bridge
     
     def set_grid(self, grid):
+        for row in grid:
+            for (mac, lamp) in row:
+                pass
+        #        if mac not in self.bridges:
+        #            raise UnknownBridgeException
         self.grid = grid
         self.height = len(self.grid)
         self.width = max([len(x) for x in self.grid]) if self.height > 0 else 0
