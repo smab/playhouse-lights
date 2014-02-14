@@ -29,10 +29,37 @@ def json_parser(func):
             return errorcodes.INVALID_JSON
     return new_post
 
+def json_validator(jformat):
+    def decorator(func):
+        def is_valid(data, jf):
+            print("Testing", data, "vs", jf)
+            if type(jf) is dict:
+                # handle optional keys (?-prefixed)
+                all_keys = set(x[1:] if x[0] == '?' else x for x in jf)
+                required_keys = set(x for x in jf if x[0] != '?')
+                jf = {k[1:] if k[0] == '?' else k: v for k, v in jf.items()}
+            # don't even ask
+            return (type(jf) is list and type(data) is list and all(is_valid(d, jf[0]) for d in data)) or \
+                   (type(jf) is tuple and type(data) is list and len(data) == len(jf) and all(is_valid(a, b) for a, b in zip(data, jf))) or \
+                   (type(jf) is dict and type(data) is dict and data.keys() <= all_keys and data.keys() >= required_keys and all(is_valid(data[k], jf[k]) for k in data)) or \
+                   (type(jf) is set and type(data) in jf) or \
+                   (type(jf) is type and type(data) is jf)
+        
+        def new_func(self, data, *args, **kwargs):
+            if is_valid(data, jformat):
+                return func(self, data, *args, **kwargs)
+            else:
+                return errorcodes.INVALID_FORMAT
+        
+        return new_func
+    
+    return decorator
+
 
 class LightsHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
+    @json_validator([{"x": int, "y": int, "change": dict}])
     def post(self, data):
         print("Request was", data)
         for light in data:
@@ -43,6 +70,7 @@ class LightsHandler(tornado.web.RequestHandler):
 class LightsAllHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
+    @json_validator(dict)
     def post(self, data):
         grid.set_all(**data)
         grid.commit()
@@ -64,6 +92,7 @@ class BridgesHandler(tornado.web.RequestHandler):
 class BridgesAddHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
+    @json_validator({"ip": str, "?username": {str, type(None)}})
     def post(self, data):
         try:
             username = data.get("username", None)
@@ -77,6 +106,7 @@ class BridgesAddHandler(tornado.web.RequestHandler):
 class BridgesMacHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
+    @json_validator({"username": {str, type(None)}})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -163,8 +193,19 @@ class GridHandler(tornado.web.RequestHandler):
             for (mac, lamp) in row:
                 row_data.append({"mac":mac,"lamp":lamp})
             data.append(row_data)
-        return data
+        return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
 
+class BridgesSaveHandler(tornado.web.RequestHandler):
+    @return_json
+    def post(self):
+        # TODO
+        return errorcodes.NOT_IMPLEMENTED
+
+class GridSaveHandler(tornado.web.RequestHandler):
+    @return_json
+    def post(self):
+        # TODO
+        return errorcodes.NOT_IMPLEMENTED
 
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
@@ -175,7 +216,9 @@ application = tornado.web.Application([
     (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
     (r'/bridges/search', BridgesSearchHandler),
     (r'/bridges/search/result', BridgesSearchResultHandler),
-    (r'/grid', GridHandler)
+    (r'/grid', GridHandler),
+    (r'/bridges/save', BridgesSaveHandler),
+    (r'/grid/save', GridSaveHandler),
 ])
 
 
