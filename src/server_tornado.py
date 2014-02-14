@@ -32,7 +32,7 @@ def json_parser(func):
 def json_validator(jformat):
     def decorator(func):
         def is_valid(data, jf):
-            print("Testing", data, "vs", jf)
+            print("Testing", repr(data), "vs", jf)
             if type(jf) is dict:
                 # handle optional keys (?-prefixed)
                 all_keys = set(x[1:] if x[0] == '?' else x for x in jf)
@@ -167,15 +167,10 @@ class BridgeLampSearchHandler(tornado.web.RequestHandler):
 class GridHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
+    @json_validator([[{"mac": str, "lamp": int}]])
     def post(self, data):
         try:
-            g = []
-            for d_row in data:
-                row = []
-                for d_lamp in d_row:
-                    lamp = (d_lamp["mac"],d_lamp["lamp"])
-                    row.append(lamp)
-                g.append(row)              
+            g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
             grid.set_grid(g)
             return {"state": "success"}
         except UnicodeDecodeError:
@@ -187,12 +182,7 @@ class GridHandler(tornado.web.RequestHandler):
             
     @return_json    
     def get(self):
-        data = []
-        for row in grid.grid:
-            row_data = []
-            for (mac, lamp) in row:
-                row_data.append({"mac":mac,"lamp":lamp})
-            data.append(row_data)
+        data = [[{"mac": mac, "lamp": lamp} for mac, lamp in row] for row in grid.grid]
         return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
 
 class BridgesSaveHandler(tornado.web.RequestHandler):

@@ -21,7 +21,7 @@ class ErrorCodeDict(dict):
     def format(self, **kwargs):
         return ErrorCodeDict(self, errormessage=self['errormessage'].format(**kwargs))
     
-    def append(self, **kwargs):
+    def merge(self, **kwargs):
         return ErrorCodeDict(self, **kwargs)
 
 
