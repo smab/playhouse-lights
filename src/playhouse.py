@@ -165,7 +165,7 @@ class LightGrid:
     def set_grid(self, grid):
         self.grid = grid
         self.height = len(self.grid)
-        self.width = max([len(x) for x in self.grid]) if self.height > 0 else 0
+        self.width = max(len(x) for x in self.grid) if self.height > 0 else 0
     
     def set_state(self, x, y, **args):
         """Set the state for a specific lamp. If this grid is buffered, the state will not be sent to the lamp directly.

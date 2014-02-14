@@ -8,6 +8,7 @@ The result is an ErrorCodeDict of the format:
 _error_codes = {
     "NOT_UNICODE": "couldn't decode as UTF-8",
     "INVALID_JSON": "invalid JSON",
+    "INVALID_FORMAT": "the JSON was in an unexpected format",
     "BRIDGE_NOT_FOUND": "couldn't find a Hue bridge at given address '{ip}'",
     "BRIDGE_ALREADY_ADDED": "bridge has already been added to the server",
     "NO_SUCH_MAC": "the server does not know of a bridge with the MAC address '{mac}'",
