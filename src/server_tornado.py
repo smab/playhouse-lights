@@ -11,6 +11,9 @@ import errorcodes
 import playhouse
 
 
+CONFIG = "config.json"
+
+
 def return_json(func):
     def new_func(self, *args, **kwargs):
         self.set_header("Content-Type", "application/json")
@@ -79,14 +82,18 @@ class LightsAllHandler(tornado.web.RequestHandler):
 class BridgesHandler(tornado.web.RequestHandler):
     @return_json
     def get(self):
-        res = {"state": "success"}
-        for mac, bridge in grid.bridges.items():
-            res[mac] = {
-                "ip": bridge.ipaddress,
-                "username": bridge.username,
-                "valid_username": bridge.logged_in,
-                "lights": len(bridge.get_lights()) if bridge.logged_in else -1
-            }
+        res = {
+            "bridges": {
+                mac: {
+                    "ip": bridge.ipaddress,
+                    "username": bridge.username,
+                    "valid_username": bridge.logged_in,
+                    "lights": len(bridge.get_lights()) if bridge.logged_in else -1
+                }
+                for mac, bridge in grid.bridges.items()
+            },
+            "state": "success"
+        }
         return res
 
 class BridgesAddHandler(tornado.web.RequestHandler):
@@ -157,8 +164,7 @@ class BridgesSearchResultHandler(tornado.web.RequestHandler):
         
 class BridgeLampSearchHandler(tornado.web.RequestHandler):
     @return_json
-    @json_parser
-    def post(self, data, mac):        
+    def post(self, mac):        
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         grid.bridges[mac].search_lights()
@@ -188,14 +194,25 @@ class GridHandler(tornado.web.RequestHandler):
 class BridgesSaveHandler(tornado.web.RequestHandler):
     @return_json
     def post(self):
-        # TODO
-        return errorcodes.NOT_IMPLEMENTED
+        with open(CONFIG, 'r+') as f:
+            conf = tornado.escape.json_decode(f.read())
+            conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
+            conf['usernames'] = {bridge.serial_number: bridge.username for bridge in grid.bridges.values()}
+            f.seek(0)
+            f.write(tornado.escape.json_encode(conf))
+            f.truncate()
+        return {"state": "success"}
 
 class GridSaveHandler(tornado.web.RequestHandler):
     @return_json
     def post(self):
-        # TODO
-        return errorcodes.NOT_IMPLEMENTED
+        with open(CONFIG, 'r+') as f:
+            conf = tornado.escape.json_decode(f.read())
+            conf['grid'] = grid.grid
+            f.seek(0)
+            f.write(tornado.escope.json_encode(conf))
+            f.truncate()
+        return {"state": "success"}
 
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
@@ -213,7 +230,7 @@ application = tornado.web.Application([
 
 
 def init_lightgrid():
-    with open('config.json', 'r') as file:
+    with open(CONFIG, 'r') as file:
         config = tornado.escape.json_decode(file.read())
         config["grid"] = [ [ (x[0], x[1]) for x in row ] for row in config["grid"] ]
         print(config)
