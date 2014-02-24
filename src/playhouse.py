@@ -21,6 +21,9 @@ class BridgeAlreadyAddedException(Exception):
 class UnknownBridgeException(Exception):
     def __this__(self, mac):
         self.mac = mac
+        
+class NoLinkButtonPressedException(Exception):
+    pass
 
 
 class Bridge:
@@ -107,10 +110,15 @@ class Bridge:
             body['username'] = username
         res = self.send_raw("POST", "/api", body)[0]
         if "error" in res:
-            raise Exception(res['error']['description'])
+            
+            if res['error']['description'] == "link button not pressed":
+                raise NoLinkButtonPressedException
+            else:
+                raise Exception(res['error']['description'])
         else:
             self.username = res['success']['username']
             self.update_info()
+            return self.username
     
     def update_info(self):
         info = self.send_request("GET", "/config")

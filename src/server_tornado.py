@@ -164,11 +164,34 @@ class BridgesSearchResultHandler(tornado.web.RequestHandler):
         
 class BridgeLampSearchHandler(tornado.web.RequestHandler):
     @return_json
-    def post(self, mac):        
+    def post(self, mac): 
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         grid.bridges[mac].search_lights()
         return {"state": "success"}
+        
+        
+class BridgeAddUserHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+ 
+    def post(self, data, mac):  
+
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        username = data.get("username", None)
+        
+        try:
+            newname = grid.bridges[mac].create_user("playhouse user", username)
+            return {"state": "success", "username":newname}
+        except playhouse.NoLinkButtonPressedException:
+        
+            return errorcodes.NO_LINKBUTTON
+        except Exception as ex:
+            print(ex)
+            return errorcodes.INVALID_NAME
+            
+            
         
 class GridHandler(tornado.web.RequestHandler):
     @return_json
@@ -221,6 +244,7 @@ application = tornado.web.Application([
     (r'/bridges/add', BridgesAddHandler),
     (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
     (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
+    (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
     (r'/bridges/search', BridgesSearchHandler),
     (r'/bridges/search/result', BridgesSearchResultHandler),
     (r'/grid', GridHandler),
