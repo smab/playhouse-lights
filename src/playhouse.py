@@ -16,7 +16,16 @@ import tornado.httpclient
 
 class BridgeAlreadyAddedException(Exception):
     pass
-    
+
+class HueAPIException(Exception):
+    def __init__(self, error):
+        super().__init__("{}: {}".format(error["error"]["address"], error["error"]["description"]))
+        self.address = error["error"]["address"]
+        self.description = error["error"]["description"]
+        self.type = error["error"]["type"]
+
+class LinkButtonNotPressedException(HueAPIException):
+    pass
     
 class UnknownBridgeException(Exception):
     def __this__(self, mac):
@@ -60,7 +69,18 @@ class Bridge:
             body = json.dumps(body)
         
         self.bridge.request(method, url, body)
-        return json.loads(self.bridge.getresponse().read().decode('utf-8'))
+        
+        res = json.loads(self.bridge.getresponse().read().decode('utf-8'))
+        
+        exceptions = {
+            101: LinkButtonNotPressedException
+        }
+        if type(res) is list:
+            for item in res:
+                if "error" in item:
+                    raise exceptions.get(item["error"]["type"], HueAPIException)(item)
+        
+        return res
     
     def send_request(self, method, url, body=None):
         user = self.username
@@ -106,11 +126,8 @@ class Bridge:
         if username is not None:
             body['username'] = username
         res = self.send_raw("POST", "/api", body)[0]
-        if "error" in res:
-            raise Exception(res['error']['description'])
-        else:
-            self.username = res['success']['username']
-            self.update_info()
+        self.username = res['success']['username']
+        self.update_info()
     
     def update_info(self):
         info = self.send_request("GET", "/config")

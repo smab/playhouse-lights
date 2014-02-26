@@ -127,8 +127,29 @@ class BridgesMacHandler(tornado.web.RequestHandler):
         
         del grid.bridges[mac]
         return {"state": "success"}
-        
 
+
+class BridgeLampSearchHandler(tornado.web.RequestHandler):
+    @return_json
+    def post(self, mac):        
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        grid.bridges[mac].search_lights()
+        return {"state": "success"}
+
+
+class BridgeNewUserHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    @json_validator({"devicetype": str, "?username": str})
+    def post(self, data, mac):
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        try:
+            grid.bridges[mac].create_user(data['devicetype'], data.get('username', None))
+        except playhouse.LinkButtonNotPressedException:
+            return errorcodes.LINK_BUTTON_NOT_PRESSED
+        return {"state": "success", "username": grid.bridges[mac].username}
 
 
 event = threading.Event()
@@ -153,6 +174,7 @@ class BridgesSearchHandler(tornado.web.RequestHandler):
         
         return {"state": "success"}
 
+
 class BridgesSearchResultHandler(tornado.web.RequestHandler):
     @return_json
     def get(self):
@@ -161,30 +183,16 @@ class BridgesSearchResultHandler(tornado.web.RequestHandler):
         
         return {"state": "success", "bridges": {b.serial_number: b.ipaddress for b in new_bridges}}
         
-        
-class BridgeLampSearchHandler(tornado.web.RequestHandler):
-    @return_json
-    def post(self, mac):        
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        grid.bridges[mac].search_lights()
-        return {"state": "success"}
+
         
 class GridHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
     @json_validator([[{"mac": str, "lamp": int}]])
     def post(self, data):
-        try:
-            g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
-            grid.set_grid(g)
-            return {"state": "success"}
-        except UnicodeDecodeError:
-            return errorcodes.NOT_UNICODE
-        #except playhouse.UnknownBridgeException as e:
-        #    return errorcodes.NO_SUCH_MAC.format(mac=e.mac)
-        except ValueError:
-            return errorcodes.INVALID_JSON
+        g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
+        grid.set_grid(g)
+        return {"state": "success"}
             
     @return_json    
     def get(self):
@@ -221,6 +229,7 @@ application = tornado.web.Application([
     (r'/bridges/add', BridgesAddHandler),
     (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
     (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
+    (r'/bridges/([0-9a-f]{12})/newuser', BridgeNewUserHandler),
     (r'/bridges/search', BridgesSearchHandler),
     (r'/bridges/search/result', BridgesSearchResultHandler),
     (r'/grid', GridHandler),
