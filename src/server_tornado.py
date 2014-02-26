@@ -138,18 +138,23 @@ class BridgeLampSearchHandler(tornado.web.RequestHandler):
         return {"state": "success"}
 
 
-class BridgeNewUserHandler(tornado.web.RequestHandler):
+class BridgeAddUserHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
     @json_validator({"devicetype": str, "?username": str})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        username = data.get("username", None)
+        
         try:
-            grid.bridges[mac].create_user(data['devicetype'], data.get('username', None))
-        except playhouse.LinkButtonNotPressedException:
-            return errorcodes.LINK_BUTTON_NOT_PRESSED
-        return {"state": "success", "username": grid.bridges[mac].username}
+            newname = grid.bridges[mac].create_user("playhouse user", username)
+            return {"state": "success", "username": newname}
+        except playhouse.NoLinkButtonPressedException:
+            return errorcodes.NO_LINKBUTTON
+        except Exception:
+            traceback.print_exc()
+            return errorcodes.INVALID_NAME
 
 
 event = threading.Event()
@@ -182,9 +187,8 @@ class BridgesSearchResultHandler(tornado.web.RequestHandler):
             return errorcodes.CURRENTLY_SEARCHING
         
         return {"state": "success", "bridges": {b.serial_number: b.ipaddress for b in new_bridges}}
-        
 
-        
+
 class GridHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
@@ -229,7 +233,7 @@ application = tornado.web.Application([
     (r'/bridges/add', BridgesAddHandler),
     (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
     (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
-    (r'/bridges/([0-9a-f]{12})/newuser', BridgeNewUserHandler),
+    (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
     (r'/bridges/search', BridgesSearchHandler),
     (r'/bridges/search/result', BridgesSearchResultHandler),
     (r'/grid', GridHandler),

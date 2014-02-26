@@ -24,12 +24,13 @@ class HueAPIException(Exception):
         self.description = error["error"]["description"]
         self.type = error["error"]["type"]
 
-class LinkButtonNotPressedException(HueAPIException):
+class NoLinkButtonPressedException(HueAPIException):
     pass
-    
+
 class UnknownBridgeException(Exception):
     def __this__(self, mac):
         self.mac = mac
+
 
 
 class Bridge:
@@ -73,7 +74,7 @@ class Bridge:
         res = json.loads(self.bridge.getresponse().read().decode('utf-8'))
         
         exceptions = {
-            101: LinkButtonNotPressedException
+            101: NoLinkButtonPressedException
         }
         if type(res) is list:
             for item in res:
@@ -128,6 +129,7 @@ class Bridge:
         res = self.send_raw("POST", "/api", body)[0]
         self.username = res['success']['username']
         self.update_info()
+        return self.username
     
     def update_info(self):
         info = self.send_request("GET", "/config")

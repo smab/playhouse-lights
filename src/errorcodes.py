@@ -13,8 +13,9 @@ _error_codes = {
     "BRIDGE_ALREADY_ADDED": "bridge has already been added to the server",
     "NO_SUCH_MAC": "the server does not know of a bridge with the MAC address '{mac}'",
     "CURRENTLY_SEARCHING": "currently searching for bridges",
-    "LINK_BUTTON_NOT_PRESSED": "the link button was not pressed",
-    "NOT_IMPLEMENTED": "feature not implemented yet"
+    "NOT_IMPLEMENTED": "feature not implemented yet",
+    "NO_LINKBUTTON": "link button not pressed",
+    "INVALID_NAME": "user name is too short"
 }
 
 class ErrorCodeDict(dict):
