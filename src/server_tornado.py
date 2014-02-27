@@ -66,7 +66,14 @@ class LightsHandler(tornado.web.RequestHandler):
     def post(self, data):
         print("Request was", data)
         for light in data:
-            grid.set_state(light['x'], light['y'], **light['change'])
+            try:
+                grid.set_state(light['x'], light['y'], **light['change'])
+            except playhouse.NoBridgeAtCoordinateException:
+                traceback.print_exc()
+                print("No bridge added for ({},{})".format(light['x'], light['y']))
+            except playhouse.OutsideGridException:
+                traceback.print_exc()
+                print("({},{}) is outside grid bounds".format(light['x'], light['y']))
         grid.commit()
         return {"state": "success"}
 

@@ -17,6 +17,12 @@ import tornado.httpclient
 class BridgeAlreadyAddedException(Exception):
     pass
 
+class OutsideGridException(Exception):
+    pass
+
+class NoBridgeAtCoordinateException(Exception):
+    pass
+
 class HueAPIException(Exception):
     def __init__(self, error):
         super().__init__("{}: {}".format(error["error"]["address"], error["error"]["description"]))
@@ -39,7 +45,7 @@ class Bridge:
         self.defaults = defaults
         self.username = username
         self.ipaddress = ip
-        self.bridge = http.client.HTTPConnection(ip, timeout=1)
+        self.bridge = http.client.HTTPConnection(ip, timeout=2)
         
         try:
             if self.send_request("GET", "/config")['name'] != "Philips hue":
@@ -205,7 +211,12 @@ class LightGrid:
         
         """
         if x >= self.width or y >= self.height:
-            raise Exception
+            raise OutsideGridException
+        
+        mac = self.grid[y][x][0]
+        if mac not in self.bridges:
+            raise NoBridgeAtCoordinateException
+        
         row = self.grid[y]
         cell = row[x]
         self.buffer[cell].update(args)
@@ -217,7 +228,11 @@ class LightGrid:
     
     def set_all(self, **args):
         for bridge in self.bridges.values():
-            bridge.set_group(0, **args)
+            try:
+                bridge.set_group(0, **args)
+            except HueAPIException:
+                # TODO: do something with the exception
+                pass
     
     def commit(self):
         """Commit saved state changes to the lamps"""
@@ -225,7 +240,11 @@ class LightGrid:
             if len(v) != 0:
                 mac, n = k
                 bridge = self.bridges[mac]
-                bridge.set_state(n, **v) 
+                try:
+                    bridge.set_state(n, **v)
+                except HueAPIException:
+                    # TODO: do something with the exception
+                    pass
         self.buffer.clear()
                 
 
