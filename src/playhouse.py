@@ -10,8 +10,9 @@ import urllib.parse
 import urllib.request
 from xml.etree import ElementTree
 
-import tornado
 import tornado.httpclient
+import tornado.curl_httpclient
+import tornado.escape
 
 
 class BridgeAlreadyAddedException(Exception):
@@ -41,22 +42,24 @@ class UnknownBridgeException(Exception):
 
 class Bridge:
     
-    def __init__(self, ip, username=None, defaults={"transitiontime": 0}):
+    def __init__(self, ip, username=None, defaults={"transitiontime": 0}, timeout=2):
         self.defaults = defaults
         self.username = username
         self.ipaddress = ip
-        self.bridge = http.client.HTTPConnection(ip, timeout=2)
+        #self.bridge = http.client.HTTPConnection(ip, timeout=2)
+        self.bridge_async = tornado.curl_httpclient.CurlAsyncHTTPClient()
+        self.bridge_sync = tornado.httpclient.HTTPClient()
+        self.timeout = timeout
         
         try:
             if self.send_request("GET", "/config")['name'] != "Philips hue":
                 raise Exception()
             
-            self.bridge.request("GET", "/description.xml")
-            res = self.bridge.getresponse()
-            if res.status != 200:
+            res = self.http_request("GET", "/description.xml")
+            if res.code != 200:
                 raise Exception()
             
-            et, ns = parse_description(res)
+            et, ns = parse_description(res.buffer)
             desc = et.find('./default:device/default:modelDescription', namespaces=ns)
             if desc.text != "Philips hue Personal Wireless Lighting":
                 raise Exception()
@@ -66,18 +69,34 @@ class Bridge:
             raise Exception("{}: not a Philips Hue bridge".format(ip))
         
         self.update_info()
-        
-        
+    
+    
     def set_defaults(self, defaults):
         self.defaults = defaults
     
-    def send_raw(self, method, url, body=None):
+    def http_request(self, method, url, body=None, async=False):
+        if async:
+            def fetch_result(response):
+                # TODO: the fuck do we do with the responses here?
+                #print(response)
+                pass
+            self.bridge_async.fetch("http://{}{}".format(self.ipaddress, url), fetch_result,
+                                    method=method, body=body, request_timeout=self.timeout)
+        else:
+            return self.bridge_sync.fetch("http://{}{}".format(self.ipaddress, url),
+                                          method=method, body=body, request_timeout=self.timeout)
+        
+    
+    def send_raw(self, method, url, body=None, async=False):
         if body is not None:
             body = json.dumps(body)
         
-        self.bridge.request(method, url, body)
+        res = self.http_request(method, url, body, async)
+        if res is None:
+            return
+        res = tornado.escape.json_decode(res.body)
         
-        res = json.loads(self.bridge.getresponse().read().decode('utf-8'))
+        #res = json.loads(self.bridge.getresponse().read().decode('utf-8'))
         
         exceptions = {
             101: NoLinkButtonPressedException
@@ -89,12 +108,12 @@ class Bridge:
         
         return res
     
-    def send_request(self, method, url, body=None):
+    def send_request(self, method, url, body=None, async=False):
         user = self.username
         if user is None:
             user = "none"
         
-        return self.send_raw(method, "/api/{}{}".format(user, url), body)
+        return self.send_raw(method, "/api/{}{}".format(user, url), body, async)
     
     def _set_state(self, url, args):
         defs = self.defaults.copy()
@@ -104,7 +123,7 @@ class Bridge:
             defs['xy'] = rgb2xy(*defs['rgb'])
             del defs['rgb']
         
-        return self.send_request("PUT", url, defs)
+        return self.send_request("PUT", url, defs, async=True)
     
     def set_state(self, i, **args):
         return self._set_state('/lights/{}/state'.format(i), args)

@@ -35,7 +35,7 @@ def json_parser(func):
 def json_validator(jformat):
     def decorator(func):
         def is_valid(data, jf):
-            print("Testing", repr(data), "vs", jf)
+            #print("Testing", repr(data), "vs", jf)
             if type(jf) is dict:
                 # handle optional keys (?-prefixed)
                 all_keys = set(x[1:] if x[0] == '?' else x for x in jf)
@@ -52,6 +52,7 @@ def json_validator(jformat):
             if is_valid(data, jformat):
                 return func(self, data, *args, **kwargs)
             else:
+                print("Invaid request was:", data)
                 return errorcodes.INVALID_FORMAT
         
         return new_func
