@@ -183,7 +183,7 @@ class BridgeLampSearchHandler(tornado.web.RequestHandler):
 class BridgeAddUserHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
-    @json_validator({"devicetype": str, "?username": str})
+    @json_validator({"?username": str})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
