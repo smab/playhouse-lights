@@ -117,12 +117,13 @@ class BridgesAddHandler(tornado.web.RequestHandler):
         except:
             return errorcodes.BRIDGE_NOT_FOUND.format(ip=data['ip'])
         return {"state": "success",
-                bridge.serial_number: {
-                    "ip": bridge.ipaddress,
-                    "username": bridge.username,
-                    "valid_username": bridge.logged_in,
-                    "lights": len(bridge.get_lights()) if bridge.logged_in else -1
-                }}
+                "bridges": {
+                    bridge.serial_number: {
+                        "ip": bridge.ipaddress,
+                        "username": bridge.username,
+                        "valid_username": bridge.logged_in,
+                        "lights": len(bridge.get_lights()) if bridge.logged_in else -1
+                    }}}
 
 class BridgesMacHandler(tornado.web.RequestHandler):
     @return_json
