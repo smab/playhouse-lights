@@ -144,6 +144,33 @@ class BridgesMacHandler(tornado.web.RequestHandler):
         return {"state": "success"}
 
 
+class BridgeLightsHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    @json_validator([{"light": int, "change": dict}])
+    def post(self, data, mac):
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        
+        for light in data:
+            grid.bridges[mac].set_state(light['light'], **light['change'])
+        
+        return {'state': 'success'}
+
+
+class BridgeLightsAllHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    @json_validator(dict)
+    def post(self, data, mac):
+        if mac not in grid.bridges:
+            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        
+        grid.bridges[mac].set_group(0, **data)
+        
+        return {'state': 'success'}
+
+
 class BridgeLampSearchHandler(tornado.web.RequestHandler):
     @return_json
     def post(self, mac):        
@@ -249,6 +276,8 @@ application = tornado.web.Application([
     (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
     (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
     (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
+    (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
+    (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
     (r'/bridges/search', BridgesSearchHandler),
     (r'/bridges/search/result', BridgesSearchResultHandler),
     (r'/grid', GridHandler),
