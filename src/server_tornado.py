@@ -1,5 +1,6 @@
 
 import threading
+import time
 import traceback
 
 import tornado.escape
@@ -200,19 +201,34 @@ class BridgeAddUserHandler(tornado.web.RequestHandler):
 
 
 event = threading.Event()
+# later changes to the bridges if auto_add is True will be reflected
+# in new_bridges
 new_bridges = []
+last_search = -1
 
 class BridgesSearchHandler(tornado.web.RequestHandler):
     @return_json
-    def post(self):
+    @json_parser
+    @json_validator({"auto_add":bool})
+    def post(self, data):
         if event.is_set():
             return errorcodes.CURRENTLY_SEARCHING
         
         def myfunc():
-            global new_bridges
+            global new_bridges, last_search
+            nonlocal data
             event.set()
             print("running")
             new_bridges = playhouse.discover()
+            last_search = int(time.time())
+            if data['auto_add']:
+                print("auto-adding bridges")
+                for b in new_bridges:
+                    try:
+                        grid.add_bridge(b)
+                        print("added", b.serial_number)
+                    except playhouse.BridgeAlreadyAddedException:
+                        print(b.serial_number, "already added")
             print("finished")
             event.clear()
         thread = threading.Thread()
@@ -220,15 +236,25 @@ class BridgesSearchHandler(tornado.web.RequestHandler):
         thread.start()
         
         return {"state": "success"}
-
-
-class BridgesSearchResultHandler(tornado.web.RequestHandler):
+    
     @return_json
     def get(self):
         if event.is_set():
             return errorcodes.CURRENTLY_SEARCHING
         
-        return {"state": "success", "bridges": {b.serial_number: b.ipaddress for b in new_bridges}}
+        return {
+            "state": "success",
+            "finished": last_search,
+            "bridges": {
+                b.serial_number: {
+                    "ip": b.ipaddress,
+                    "username": b.username,
+                    "valid_username": b.logged_in,
+                    "lights": len(b.get_lights()) if b.logged_in else -1
+                }
+                for b in new_bridges
+            }
+        }
 
 
 class GridHandler(tornado.web.RequestHandler):
@@ -240,7 +266,7 @@ class GridHandler(tornado.web.RequestHandler):
         grid.set_grid(g)
         return {"state": "success"}
             
-    @return_json    
+    @return_json
     def get(self):
         data = [[{"mac": mac, "lamp": lamp} for mac, lamp in row] for row in grid.grid]
         return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
@@ -279,7 +305,6 @@ application = tornado.web.Application([
     (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
     (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
     (r'/bridges/search', BridgesSearchHandler),
-    (r'/bridges/search/result', BridgesSearchResultHandler),
     (r'/grid', GridHandler),
     (r'/bridges/save', BridgesSaveHandler),
     (r'/grid/save', GridSaveHandler),

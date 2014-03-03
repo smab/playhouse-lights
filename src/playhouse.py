@@ -11,7 +11,11 @@ import urllib.request
 from xml.etree import ElementTree
 
 import tornado.httpclient
-import tornado.curl_httpclient
+try:
+    import tornado.curl_httpclient
+    AsyncHTTPClient = tornado.curl_httpclient.CurlAsyncHTTPClient
+except ImportError:
+    AsyncHTTPClient = tornado.httpclient.AsyncHTTPClient
 import tornado.escape
 
 
@@ -47,7 +51,7 @@ class Bridge:
         self.username = username
         self.ipaddress = ip
         #self.bridge = http.client.HTTPConnection(ip, timeout=2)
-        self.bridge_async = tornado.curl_httpclient.CurlAsyncHTTPClient()
+        self.bridge_async = AsyncHTTPClient()
         self.bridge_sync = tornado.httpclient.HTTPClient()
         self.timeout = timeout
         
@@ -201,12 +205,17 @@ class LightGrid:
 #                self.state[(mac, int(k))] = v["state"]
                     
     
-    def add_bridge(self, ip_address, username=None):
-        bridge = Bridge(ip_address, username, self.defaults)
+    def add_bridge(self, ip_address_or_bridge, username=None):
+        # can take an already instantiated bridge instance
+        if type(ip_address_or_bridge) is Bridge:
+            bridge = ip_address_or_bridge
+        else:
+            bridge = Bridge(ip_address_or_bridge, username, self.defaults)
+        
         if bridge.serial_number in self.bridges:
             raise BridgeAlreadyAddedException()
         
-        if username is None and bridge.serial_number in self.usernames:
+        if bridge.username is None and bridge.serial_number in self.usernames:
             bridge.set_username(self.usernames[bridge.serial_number])
         self.bridges[bridge.serial_number] = bridge
         return bridge
