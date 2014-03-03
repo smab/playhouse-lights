@@ -184,7 +184,7 @@ class BridgeLampSearchHandler(tornado.web.RequestHandler):
 class BridgeAddUserHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
-    @json_validator({"devicetype": str, "?username": str})
+    @json_validator({"?username": str})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -293,6 +293,56 @@ class GridSaveHandler(tornado.web.RequestHandler):
             f.write(tornado.escope.json_encode(conf))
             f.truncate()
         return {"state": "success"}
+        
+class DebugHandler(tornado.web.RequestHandler):
+    def get(self):
+        website = """
+<!DOCTYPE html>
+<html>
+<head><title>Debug</title></head>
+<script>
+function send_get(){
+    var req = new XMLHttpRequest();
+    url = document.getElementById('url').value;
+    req.open("GET",url,false);
+    req.send(null);
+    response = req.responseText;
+    document.getElementById('response').value = response;
+}
+
+function send_post(){
+    var req = new XMLHttpRequest();
+    url = document.getElementById('url').value;
+    request = document.getElementById('request').value;
+    req.open("POST",url,false);
+    req.setRequestHeader("Content-type", "application/json");
+    req.setRequestHeader("Content-length", request.length);
+    req.setRequestHeader("Connection", "close");
+    req.send(request);
+    response = req.responseText;
+    document.getElementById('response').value = response;
+}
+</script>
+<body>
+
+<h2>Request</h2>
+<button type="button" onclick="send_get()">GET</button>
+<button type="button" onclick="send_post()">POST</button><br />
+<input type="text" name="url" id="url"><br />
+<textarea rows="10" cols="50" id="request"></textarea>
+<h2>Response</h2>
+<textarea readonly="readonly" rows="10" cols="50" id="response"></textarea>
+ 
+</body>
+</html>
+
+
+
+</html>
+
+        
+        """
+        self.write(website)
 
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
@@ -308,6 +358,7 @@ application = tornado.web.Application([
     (r'/grid', GridHandler),
     (r'/bridges/save', BridgesSaveHandler),
     (r'/grid/save', GridSaveHandler),
+    (r'/debug', DebugHandler)
 ])
 
 

@@ -13,8 +13,8 @@ def send_raw(conn, method, url, body=None):
 
 client = http.client.HTTPConnection("localhost", 4711)
 
-grid = send_raw(client, "GET", "/grid")
-
+grid = send_raw(client, "GET", "/grid")["grid"]
+print(grid)
 height = len(grid)
 width = max([len(x) for x in grid])
 print(width, height)
