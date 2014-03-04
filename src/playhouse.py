@@ -13,9 +13,9 @@ from xml.etree import ElementTree
 import tornado.httpclient
 try:
     import tornado.curl_httpclient
-    AsyncHTTPClient = tornado.curl_httpclient.CurlAsyncHTTPClient
+    tornado.httpclient.AsyncHTTPClient.configure(tornado.curl_httpclient.CurlAsyncHTTPClient)
 except ImportError:
-    AsyncHTTPClient = tornado.httpclient.AsyncHTTPClient
+    pass # use default implementation
 import tornado.escape
 
 
@@ -51,7 +51,7 @@ class Bridge:
         self.username = username
         self.ipaddress = ip
         #self.bridge = http.client.HTTPConnection(ip, timeout=2)
-        self.bridge_async = AsyncHTTPClient()
+        self.bridge_async = tornado.httpclient.AsyncHTTPClient()
         self.bridge_sync = tornado.httpclient.HTTPClient()
         self.timeout = timeout
         

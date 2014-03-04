@@ -344,6 +344,10 @@ function send_post(){
         """
         self.write(website)
 
+class StatusHandler(tornado.web.RequestHandler):
+    def get(self):
+        pass
+
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
     (r'/lights/all', LightsAllHandler),
@@ -358,7 +362,8 @@ application = tornado.web.Application([
     (r'/grid', GridHandler),
     (r'/bridges/save', BridgesSaveHandler),
     (r'/grid/save', GridSaveHandler),
-    (r'/debug', DebugHandler)
+    (r'/debug', DebugHandler),
+    (r'/status', StatusHandler),
 ])
 
 
