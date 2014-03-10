@@ -1,4 +1,5 @@
 
+import logging
 import threading
 import time
 import traceback
@@ -19,6 +20,7 @@ def return_json(func):
     def new_func(self, *args, **kwargs):
         self.set_header("Content-Type", "application/json")
         data = func(self, *args, **kwargs)
+        logging.debug("Sent response %s", data)
         self.write(tornado.escape.json_encode(data))
     return new_func
 
@@ -36,7 +38,7 @@ def json_parser(func):
 def json_validator(jformat):
     def decorator(func):
         def is_valid(data, jf):
-            #print("Testing", repr(data), "vs", jf)
+            logging.debug("Testing %s vs %s", repr(data), jf)
             if type(jf) is dict:
                 # handle optional keys (?-prefixed)
                 all_keys = set(x[1:] if x[0] == '?' else x for x in jf)
@@ -50,10 +52,11 @@ def json_validator(jformat):
                    (type(jf) is type and type(data) is jf)
         
         def new_func(self, data, *args, **kwargs):
+            logging.debug("Got request %s", data)
             if is_valid(data, jformat):
                 return func(self, data, *args, **kwargs)
             else:
-                print("Invaid request was:", data)
+                logging.debug("Request was invalid")
                 return errorcodes.INVALID_FORMAT
         
         return new_func
@@ -66,16 +69,15 @@ class LightsHandler(tornado.web.RequestHandler):
     @json_parser
     @json_validator([{"x": int, "y": int, "change": dict}])
     def post(self, data):
-        print("Request was", data)
         for light in data:
             try:
                 grid.set_state(light['x'], light['y'], **light['change'])
             except playhouse.NoBridgeAtCoordinateException:
-                traceback.print_exc()
-                print("No bridge added for ({},{})".format(light['x'], light['y']))
+                logging.warning("No bridge added for (%s,%s)", light['x'], light['y'])
+                logging.debug("", exc_info=True)
             except playhouse.OutsideGridException:
-                traceback.print_exc()
-                print("({},{}) is outside grid bounds".format(light['x'], light['y']))
+                logging.warning("(%s,%s) is outside grid bounds", light['x'], light['y'])
+                logging.debug("", exc_info=True)
         grid.commit()
         return {"state": "success"}
 
@@ -196,7 +198,7 @@ class BridgeAddUserHandler(tornado.web.RequestHandler):
         except playhouse.NoLinkButtonPressedException:
             return errorcodes.NO_LINKBUTTON
         except Exception:
-            traceback.print_exc()
+            logging.debug("", exc_info=True)
             return errorcodes.INVALID_NAME
 
 
@@ -218,18 +220,21 @@ class BridgesSearchHandler(tornado.web.RequestHandler):
             global new_bridges, last_search
             nonlocal data
             event.set()
-            print("running")
+            
+            logging.info("Running bridge discovery")
             new_bridges = playhouse.discover()
+            logging.debug("Bridges found: %s", new_bridges)
+            
             last_search = int(time.time())
             if data['auto_add']:
-                print("auto-adding bridges")
+                logging.info("Auto-adding bridges")
                 for b in new_bridges:
                     try:
                         grid.add_bridge(b)
-                        print("added", b.serial_number)
+                        logging.info("Added %s", b.serial_number)
                     except playhouse.BridgeAlreadyAddedException:
-                        print(b.serial_number, "already added")
-            print("finished")
+                        logging.info("%s already added", b.serial_number)
+            logging.info("Bridge discovery finished")
             event.clear()
         thread = threading.Thread()
         thread.run = myfunc
@@ -264,6 +269,7 @@ class GridHandler(tornado.web.RequestHandler):
     def post(self, data):
         g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
         grid.set_grid(g)
+        logging.debug("Grid is set to %s", g)
         return {"state": "success"}
             
     @return_json
@@ -368,24 +374,57 @@ application = tornado.web.Application([
 
 
 def init_lightgrid():
+    
+    logging.info("Reading configuration file")
+    
     with open(CONFIG, 'r') as file:
         config = tornado.escape.json_decode(file.read())
+        logging.debug("Configuration was %s", config)
+        
         config["grid"] = [ [ (x[0], x[1]) for x in row ] for row in config["grid"] ]
-        print(config)
-
+        logging.debug("Constructed grid %s", config["grid"])
+    
+    logging.debug("Instatiating LightGrid")
     grid = playhouse.LightGrid(config["usernames"], config["grid"], buffered=True)
+    
+    logging.info("Adding preconfigured bridges")
     for ip in config["ips"]:
         try:
-            grid.add_bridge(ip)
-        except:
-            traceback.print_exc()
-            print("Couldn't add ip", ip)
+            bridge = grid.add_bridge(ip)
+            logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
+        except Exception as e:
+            logging.warning("Couldn't find a bridge at %s", ip)
+            logging.debug("", exc_info=True)
+    logging.info("Finished adding bridges")
+    
     return grid
 
 
 
 if __name__ == "__main__":
+    format_string = "%(created)d:%(levelname)s:%(module)s:%(funcName)s:%(lineno)d > %(message)s"
+    formatter = logging.Formatter(format_string)
+    
+    logging.basicConfig(filename="lightserver-all.log",
+                        level=logging.DEBUG,
+                        format=format_string)
+    
+    file_handler = logging.FileHandler(filename="lightserver.log")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    
+    stderr_handler = logging.StreamHandler()
+    stderr_handler.setLevel(logging.INFO)
+    stderr_handler.setFormatter(formatter)
+    
+    logging.getLogger().addHandler(file_handler)
+    logging.getLogger().addHandler(stderr_handler)
+    
+    logging.info("Initializing light server")
+    
     grid = init_lightgrid()
 
     application.listen(4711)
+    
+    logging.info("Server now listening at port 4711")
     tornado.ioloop.IOLoop.instance().start()

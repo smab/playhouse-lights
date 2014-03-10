@@ -4,6 +4,7 @@ import copy
 import http.client
 import io
 import json
+import logging
 import socket
 import traceback
 import urllib.parse
@@ -39,7 +40,7 @@ class NoLinkButtonPressedException(HueAPIException):
     pass
 
 class UnknownBridgeException(Exception):
-    def __this__(self, mac):
+    def __init__(self, mac):
         self.mac = mac
 
 
@@ -79,16 +80,20 @@ class Bridge:
         self.defaults = defaults
     
     def http_request(self, method, url, body=None, async=False):
+        logging.debug("Sending %s request %s %s (data: %s) to %s", "async" if async else "sync",
+                      method, url, body, self.ipaddress)
         if async:
             def fetch_result(response):
                 # TODO: the fuck do we do with the responses here?
-                #print(response)
+                logging.debug("Async response from bridge: %s", response)
                 pass
             self.bridge_async.fetch("http://{}{}".format(self.ipaddress, url), fetch_result,
                                     method=method, body=body, request_timeout=self.timeout)
         else:
-            return self.bridge_sync.fetch("http://{}{}".format(self.ipaddress, url),
+            response = self.bridge_sync.fetch("http://{}{}".format(self.ipaddress, url),
                                           method=method, body=body, request_timeout=self.timeout)
+            logging.debug("Sync response from bridge: %s", response)
+            return response
         
     
     def send_raw(self, method, url, body=None, async=False):
@@ -291,33 +296,42 @@ def discover(attempts=2, timeout=2):
     
     locations = set()
     
+    logging.info("Broadcasting %s times", attempts)
     for i in range(attempts):
+        logging.info("Broadcast #%s", i + 1)
         sock.sendto(message, ("239.255.255.250", 1900))
         while True:
             try:
+                logging.debug("Waiting for response")
+                
                 raw, (address, port) = sock.recvfrom(1024)
                 response = io.BytesIO(raw)
+                
+                logging.debug("Got response: %s", response)
+                
                 response.makefile = lambda *args, **kwargs: response
                 header = http.client.HTTPResponse(response)
                 header.begin()
-                print(header.status)
+                
+                logging.debug("Response status was %s and location header was %s",
+                              header.status, header.getheader('location'))
                 if header.status == 200 and header.getheader('location') is not None:
+                    logging.debug("Adding %s to list", address)
                     locations.add(address)
             except socket.timeout:
+                logging.info("No response from broadcast #%s in %s second(s)", i + 1, timeout)
                 break
     
+    logging.debug("List of addresses is %s", locations)
     bridges = []
     for loc in locations:
         try:
+            logging.debug("Attempting to find a bridge at %s", loc)
             bridges.append(Bridge(loc))
+            logging.debug("Bridge found")
         except:
-            traceback.print_exc()
-            pass # invalid bridge
-        """et, ns = parse_description(urllib.request.urlopen(loc))
-        if et.find("./default:device/default:modelDescription", namespaces=ns).text == 'Philips hue Personal Wireless Lighting':
-            mac = et.find("./default:device/default:serialNumber", namespaces=ns).text
-            url = urllib.parse.urlparse(et.find("./default:URLBase", namespaces=ns).text)
-            bridges[mac] = url.netloc"""
+            logging.debug("Bridge not found", exc_info=True)
+            pass
     
     return bridges
 
