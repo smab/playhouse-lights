@@ -28,4 +28,4 @@ class ErrorCodeDict(dict):
 
 
 for ec, em in _error_codes.items():
-    globals()[ec] = ErrorCodeDict({"status": "error", "errorcode": ec, "errormessage": em})
+    globals()[ec] = ErrorCodeDict({"state": "error", "errorcode": ec, "errormessage": em})
