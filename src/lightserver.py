@@ -1,11 +1,14 @@
 
+import json
 import logging
+import ssl
 import threading
 import time
 import traceback
 
 import tornado.escape
 import tornado.gen
+import tornado.httpserver
 import tornado.ioloop
 import tornado.web
 
@@ -14,6 +17,7 @@ import playhouse
 
 
 CONFIG = "config.json"
+BRIDGE_CONFIG = "bridge_setup.json"
 
 
 def return_json(func):
@@ -280,7 +284,7 @@ class GridHandler(tornado.web.RequestHandler):
 class BridgesSaveHandler(tornado.web.RequestHandler):
     @return_json
     def post(self):
-        with open(CONFIG, 'r+') as f:
+        with open(BRIDGE_CONFIG, 'r+') as f:
             conf = tornado.escape.json_decode(f.read())
             conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
             conf['usernames'] = {bridge.serial_number: bridge.username for bridge in grid.bridges.values()}
@@ -292,7 +296,7 @@ class BridgesSaveHandler(tornado.web.RequestHandler):
 class GridSaveHandler(tornado.web.RequestHandler):
     @return_json
     def post(self):
-        with open(CONFIG, 'r+') as f:
+        with open(BRIDGE_CONFIG, 'r+') as f:
             conf = tornado.escape.json_decode(f.read())
             conf['grid'] = grid.grid
             f.seek(0)
@@ -377,7 +381,7 @@ def init_lightgrid():
     
     logging.info("Reading configuration file")
     
-    with open(CONFIG, 'r') as file:
+    with open(BRIDGE_CONFIG, 'r') as file:
         config = tornado.escape.json_decode(file.read())
         logging.debug("Configuration was %s", config)
         
@@ -423,8 +427,21 @@ if __name__ == "__main__":
     logging.info("Initializing light server")
     
     grid = init_lightgrid()
-
-    application.listen(4711)
     
-    logging.info("Server now listening at port 4711")
+    
+    configuration = json.load(open(CONFIG))
+    
+    if configuration['ssl']:
+        logging.info("Setting up HTTPS server")
+        http_server = tornado.httpserver.HTTPServer(application, ssl_options={
+            "certfile": configuration['certfile'],
+            "keyfile": configuration['keyfile']
+        })
+    else:
+        logging.info("Setting up HTTP server")
+        http_server = tornado.httpserver.HTTPServer(application)
+    
+    http_server.listen(configuration['port'])
+    
+    logging.info("Server now listening at port %s", configuration['port'])
     tornado.ioloop.IOLoop.instance().start()

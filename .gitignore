@@ -1,4 +1,5 @@
 __pycache__
 lightserver-all.log
 lightserver.log
-
+config.json
+private/*
