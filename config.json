@@ -1,6 +1,0 @@
-{
-    "port": 4711,
-    "ssl": true,
-    "certfile": "private/playhouse.crt",
-    "keyfile": "private/playhouse.key"
-}
