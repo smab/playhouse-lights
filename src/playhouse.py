@@ -11,13 +11,14 @@ import urllib.parse
 import urllib.request
 from xml.etree import ElementTree
 
+import tornado.escape
+import tornado.gen
 import tornado.httpclient
 try:
     import tornado.curl_httpclient
     tornado.httpclient.AsyncHTTPClient.configure(tornado.curl_httpclient.CurlAsyncHTTPClient)
 except ImportError:
     pass # use default implementation
-import tornado.escape
 
 
 class BridgeAlreadyAddedException(Exception):
@@ -79,13 +80,14 @@ class Bridge:
     def set_defaults(self, defaults):
         self.defaults = defaults
     
-    def http_request(self, method, url, body=None, async=False):
-        logging.debug("Sending %s request %s %s (data: %s) to %s", "async" if async else "sync",
+    def http_request(self, method, url, body=None, callback=None):
+        logging.debug("Sending %s request %s %s (data: %s) to %s", "async" if callback is not None else "sync",
                       method, url, body, self.ipaddress)
-        if async:
+        if callback is not None:
             def fetch_result(response):
                 # TODO: the fuck do we do with the responses here?
                 logging.debug("Async response from bridge: %s", response)
+                callback(self.serial_number)
                 pass
             self.bridge_async.fetch("http://{}{}".format(self.ipaddress, url), fetch_result,
                                     method=method, body=body, request_timeout=self.timeout)
@@ -96,11 +98,11 @@ class Bridge:
             return response
         
     
-    def send_raw(self, method, url, body=None, async=False):
+    def send_raw(self, method, url, body=None, callback=None):
         if body is not None:
             body = json.dumps(body)
         
-        res = self.http_request(method, url, body, async)
+        res = self.http_request(method, url, body, callback)
         if res is None:
             return
         res = tornado.escape.json_decode(res.body)
@@ -117,14 +119,14 @@ class Bridge:
         
         return res
     
-    def send_request(self, method, url, body=None, async=False):
+    def send_request(self, method, url, body=None, callback=None):
         user = self.username
         if user is None:
             user = "none"
         
-        return self.send_raw(method, "/api/{}{}".format(user, url), body, async)
+        return self.send_raw(method, "/api/{}{}".format(user, url), body, callback=callback)
     
-    def _set_state(self, url, args):
+    def _set_state(self, url, args, callback=None):
         defs = self.defaults.copy()
         defs.update(args)
         
@@ -132,13 +134,13 @@ class Bridge:
             defs['xy'] = rgb2xy(*defs['rgb'])
             del defs['rgb']
         
-        return self.send_request("PUT", url, defs, async=True)
+        return self.send_request("PUT", url, body=defs, callback=callback)
     
-    def set_state(self, i, **args):
-        return self._set_state('/lights/{}/state'.format(i), args)
+    def set_state(self, i, callback=None, **args):
+        return self._set_state('/lights/{}/state'.format(i), args, callback=callback)
     
-    def set_group(self, i, **args):
-        return self._set_state('/groups/{}/action'.format(i), args)
+    def set_group(self, i, callback=None, **args):
+        return self._set_state('/groups/{}/action'.format(i), args, callback=callback)
     
     def get_lights(self):
         return self.send_request("GET", "/lights")
@@ -267,19 +269,27 @@ class LightGrid:
                 # TODO: do something with the exception
                 pass
     
+    @tornado.gen.coroutine
     def commit(self):
         """Commit saved state changes to the lamps"""
+        keys = []
+        
         for k, v in self.buffer.items():
             if len(v) != 0:
                 mac, n = k
                 bridge = self.bridges[mac]
                 try:
-                    bridge.set_state(n, **v)
+                    bridge.set_state(n, callback=(yield tornado.gen.Callback(bridge)), **v)
+                    keys.append(bridge)
                 except HueAPIException:
                     # TODO: do something with the exception
                     pass
+        
         self.buffer.clear()
-                
+        
+        results = yield tornado.gen.WaitAll(keys)
+        logging.debug("Waited for %s", results)
+        
 
 
 def discover(attempts=2, timeout=2):

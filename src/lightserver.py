@@ -69,10 +69,12 @@ def json_validator(jformat):
 
 
 class LightsHandler(tornado.web.RequestHandler):
-    @return_json
-    @json_parser
-    @json_validator([{"x": int, "y": int, "change": dict}])
-    def post(self, data):
+    #@return_json
+    #@json_parser
+    #@json_validator([{"x": int, "y": int, "change": dict}])
+    @tornado.gen.coroutine
+    def post(self):#, data):
+        data = tornado.escape.json_decode(self.request.body)
         for light in data:
             try:
                 grid.set_state(light['x'], light['y'], **light['change'])
@@ -82,8 +84,9 @@ class LightsHandler(tornado.web.RequestHandler):
             except playhouse.OutsideGridException:
                 logging.warning("(%s,%s) is outside grid bounds", light['x'], light['y'])
                 logging.debug("", exc_info=True)
-        grid.commit()
-        return {"state": "success"}
+        yield grid.commit()
+        self.write(tornado.escape.json_encode({"state": "success"}))
+        #return {"state": "success"}
 
 class LightsAllHandler(tornado.web.RequestHandler):
     @return_json
@@ -357,6 +360,7 @@ function send_post(){
 class StatusHandler(tornado.web.RequestHandler):
     def get(self):
         pass
+
 
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
