@@ -1,4 +1,6 @@
 
+import datetime
+import functools
 import json
 import logging
 import ssl
@@ -75,7 +77,8 @@ class LightsHandler(tornado.web.RequestHandler):
     @tornado.gen.coroutine
     def post(self):#, data):
         data = tornado.escape.json_decode(self.request.body)
-        for light in data:
+        
+        def set_state(light, do_commit=False):
             try:
                 grid.set_state(light['x'], light['y'], **light['change'])
             except playhouse.NoBridgeAtCoordinateException:
@@ -84,6 +87,18 @@ class LightsHandler(tornado.web.RequestHandler):
             except playhouse.OutsideGridException:
                 logging.warning("(%s,%s) is outside grid bounds", light['x'], light['y'])
                 logging.debug("", exc_info=True)
+            
+            if do_commit:
+                grid.commit()
+        
+        for light in data:
+            if "delay" in light:
+                tornado.ioloop.IOLoop.instance().add_timeout(
+                    datetime.timedelta(seconds=light['delay']),
+                    functools.partial(set_state, light, do_commit=True))
+            else:
+                set_state(light)
+        
         yield grid.commit()
         self.write(tornado.escape.json_encode({"state": "success"}))
         #return {"state": "success"}
