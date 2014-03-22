@@ -279,8 +279,8 @@ class LightGrid:
                 mac, n = k
                 bridge = self.bridges[mac]
                 try:
-                    bridge.set_state(n, callback=(yield tornado.gen.Callback(bridge)), **v)
-                    keys.append(bridge)
+                    bridge.set_state(n, callback=(yield tornado.gen.Callback((bridge, n))), **v)
+                    keys.append((bridge, n))
                 except HueAPIException:
                     # TODO: do something with the exception
                     pass

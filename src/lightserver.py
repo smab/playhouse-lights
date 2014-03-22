@@ -27,7 +27,9 @@ def return_json(func):
         self.set_header("Content-Type", "application/json")
         data = func(self, *args, **kwargs)
         logging.debug("Sent response %s", data)
-        self.write(tornado.escape.json_encode(data))
+        if data is not None:
+            self.write(tornado.escape.json_encode(data))
+            self.finish()
     return new_func
 
 def json_parser(func):
@@ -71,11 +73,11 @@ def json_validator(jformat):
 
 
 class LightsHandler(tornado.web.RequestHandler):
-    #@return_json
-    #@json_parser
-    #@json_validator([{"x": int, "y": int, "change": dict}])
-    @tornado.gen.coroutine
-    def post(self):#, data):
+    @return_json
+    @json_parser
+    @json_validator([{"x": int, "y": int, "change": dict}])
+    @tornado.web.asynchronous
+    def post(self, data):#, data):
         data = tornado.escape.json_decode(self.request.body)
         
         def set_state(light, do_commit=False):
@@ -99,9 +101,11 @@ class LightsHandler(tornado.web.RequestHandler):
             else:
                 set_state(light)
         
-        yield grid.commit()
-        self.write(tornado.escape.json_encode({"state": "success"}))
-        #return {"state": "success"}
+        tornado.ioloop.IOLoop.current().add_future(grid.commit(), self.commit_finished)
+    
+    @return_json
+    def commit_finished(self, result):
+        return {"state": "success"}
 
 class LightsAllHandler(tornado.web.RequestHandler):
     @return_json
