@@ -89,7 +89,7 @@ class LightsHandler(AuthenticationHandler):
     @return_json
     @authenticated
     @json_parser
-    @json_validator([{"x": int, "y": int, "delay": float, "change": dict}])
+    @json_validator([{"x": int, "y": int, "?delay": float, "change": dict}])
     @tornado.web.asynchronous
     def post(self, data):
         def set_state(light, do_commit=False):
