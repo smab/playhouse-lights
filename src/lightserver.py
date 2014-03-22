@@ -75,11 +75,9 @@ def json_validator(jformat):
 class LightsHandler(tornado.web.RequestHandler):
     @return_json
     @json_parser
-    @json_validator([{"x": int, "y": int, "change": dict}])
+    @json_validator([{"x": int, "y": int, "delay": float, "change": dict}])
     @tornado.web.asynchronous
-    def post(self, data):#, data):
-        data = tornado.escape.json_decode(self.request.body)
-        
+    def post(self, data):
         def set_state(light, do_commit=False):
             try:
                 grid.set_state(light['x'], light['y'], **light['change'])
