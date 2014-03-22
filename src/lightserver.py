@@ -3,6 +3,7 @@ import datetime
 import functools
 import json
 import logging
+import os
 import ssl
 import threading
 import time
@@ -22,6 +23,10 @@ CONFIG = "config.json"
 BRIDGE_CONFIG = "bridge_setup.json"
 
 
+class AuthenticationHandler(tornado.web.RequestHandler):
+    def get_current_user(self):
+        return self.get_secure_cookie("user")
+
 def return_json(func):
     def new_func(self, *args, **kwargs):
         self.set_header("Content-Type", "application/json")
@@ -30,6 +35,14 @@ def return_json(func):
         if data is not None:
             self.write(tornado.escape.json_encode(data))
             self.finish()
+    return new_func
+
+def authenticated(func):
+    def new_func(self, *args, **kwargs):
+        if require_password and not self.current_user:
+            return errorcodes.NOT_LOGGED_IN
+        else:
+            return func(self, *args, **kwargs)
     return new_func
 
 def json_parser(func):
@@ -72,8 +85,9 @@ def json_validator(jformat):
     return decorator
 
 
-class LightsHandler(tornado.web.RequestHandler):
+class LightsHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator([{"x": int, "y": int, "delay": float, "change": dict}])
     @tornado.web.asynchronous
@@ -105,8 +119,9 @@ class LightsHandler(tornado.web.RequestHandler):
     def commit_finished(self, result):
         return {"state": "success"}
 
-class LightsAllHandler(tornado.web.RequestHandler):
+class LightsAllHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator(dict)
     def post(self, data):
@@ -114,8 +129,9 @@ class LightsAllHandler(tornado.web.RequestHandler):
         grid.commit()
         return {"state": "success"}
 
-class BridgesHandler(tornado.web.RequestHandler):
+class BridgesHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     def get(self):
         res = {
             "bridges": {
@@ -131,8 +147,9 @@ class BridgesHandler(tornado.web.RequestHandler):
         }
         return res
 
-class BridgesAddHandler(tornado.web.RequestHandler):
+class BridgesAddHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator({"ip": str, "?username": {str, type(None)}})
     def post(self, data):
@@ -152,8 +169,9 @@ class BridgesAddHandler(tornado.web.RequestHandler):
                         "lights": len(bridge.get_lights()) if bridge.logged_in else -1
                     }}}
 
-class BridgesMacHandler(tornado.web.RequestHandler):
+class BridgesMacHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator({"username": {str, type(None)}})
     def post(self, data, mac):
@@ -163,6 +181,7 @@ class BridgesMacHandler(tornado.web.RequestHandler):
         return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
 
     @return_json
+    @authenticated
     def delete(self, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -171,8 +190,9 @@ class BridgesMacHandler(tornado.web.RequestHandler):
         return {"state": "success"}
 
 
-class BridgeLightsHandler(tornado.web.RequestHandler):
+class BridgeLightsHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator([{"light": int, "change": dict}])
     def post(self, data, mac):
@@ -185,8 +205,9 @@ class BridgeLightsHandler(tornado.web.RequestHandler):
         return {'state': 'success'}
 
 
-class BridgeLightsAllHandler(tornado.web.RequestHandler):
+class BridgeLightsAllHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator(dict)
     def post(self, data, mac):
@@ -198,8 +219,9 @@ class BridgeLightsAllHandler(tornado.web.RequestHandler):
         return {'state': 'success'}
 
 
-class BridgeLampSearchHandler(tornado.web.RequestHandler):
+class BridgeLampSearchHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     def post(self, mac):        
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -207,8 +229,9 @@ class BridgeLampSearchHandler(tornado.web.RequestHandler):
         return {"state": "success"}
 
 
-class BridgeAddUserHandler(tornado.web.RequestHandler):
+class BridgeAddUserHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator({"?username": str})
     def post(self, data, mac):
@@ -232,8 +255,9 @@ event = threading.Event()
 new_bridges = []
 last_search = -1
 
-class BridgesSearchHandler(tornado.web.RequestHandler):
+class BridgesSearchHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator({"auto_add":bool})
     def post(self, data):
@@ -267,6 +291,7 @@ class BridgesSearchHandler(tornado.web.RequestHandler):
         return {"state": "success"}
     
     @return_json
+    @authenticated
     def get(self):
         if event.is_set():
             return errorcodes.CURRENTLY_SEARCHING
@@ -286,8 +311,9 @@ class BridgesSearchHandler(tornado.web.RequestHandler):
         }
 
 
-class GridHandler(tornado.web.RequestHandler):
+class GridHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     @json_parser
     @json_validator([[{"mac": str, "lamp": int}]])
     def post(self, data):
@@ -297,12 +323,14 @@ class GridHandler(tornado.web.RequestHandler):
         return {"state": "success"}
             
     @return_json
+    @authenticated
     def get(self):
         data = [[{"mac": mac, "lamp": lamp} for mac, lamp in row] for row in grid.grid]
         return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
 
-class BridgesSaveHandler(tornado.web.RequestHandler):
+class BridgesSaveHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     def post(self):
         with open(BRIDGE_CONFIG, 'r+') as f:
             conf = tornado.escape.json_decode(f.read())
@@ -313,8 +341,9 @@ class BridgesSaveHandler(tornado.web.RequestHandler):
             f.truncate()
         return {"state": "success"}
 
-class GridSaveHandler(tornado.web.RequestHandler):
+class GridSaveHandler(AuthenticationHandler):
     @return_json
+    @authenticated
     def post(self):
         with open(BRIDGE_CONFIG, 'r+') as f:
             conf = tornado.escape.json_decode(f.read())
@@ -374,11 +403,30 @@ function send_post(){
         """
         self.write(website)
 
+
+class AuthenticateHandler(tornado.web.RequestHandler):
+    @return_json
+    @json_parser
+    @json_validator({"password": str, "username": str})
+    def post(self, data):
+        if require_password:
+            if data['password'] == password:
+                self.set_secure_cookie('user', data['username'])
+                return {"state": "success"}
+            else:
+                return errorcodes.INVALID_PASSWORD
+        else:
+            return errorcodes.AUTH_NOT_ENABLED
+
+
 class StatusHandler(tornado.web.RequestHandler):
     def get(self):
         pass
 
 
+# NOTE: every new instance will have a unique cookie secret,
+# meaning that cookies created by other instances will be incompatible
+# with this one
 application = tornado.web.Application([
     (r'/lights', LightsHandler),
     (r'/lights/all', LightsAllHandler),
@@ -394,8 +442,9 @@ application = tornado.web.Application([
     (r'/bridges/save', BridgesSaveHandler),
     (r'/grid/save', GridSaveHandler),
     (r'/debug', DebugHandler),
+    (r'/authenticate', AuthenticateHandler),
     (r'/status', StatusHandler),
-])
+], cookie_secret=os.urandom(256))
 
 
 def init_lightgrid():
@@ -451,6 +500,14 @@ if __name__ == "__main__":
     
     
     configuration = json.load(open(CONFIG))
+    
+    require_password = configuration['require_password']
+    if require_password:
+        logging.info("This instance will require authentication")
+        password = configuration['password']
+    else:
+        logging.warning("This instance will NOT require authentication")
+        password = None
     
     if configuration['ssl']:
         logging.info("Setting up HTTPS server")

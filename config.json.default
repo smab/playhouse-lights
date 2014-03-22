@@ -1,5 +1,7 @@
 {
     "port": 4711,
+    "require_password": false,
+    "password": "",
     "ssl": false,
     "certfile": "private/playhouse.crt",
     "keyfile": "private/playhouse.key"

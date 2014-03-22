@@ -15,6 +15,9 @@ _error_codes = {
     "CURRENTLY_SEARCHING": "currently searching for bridges",
     "NOT_IMPLEMENTED": "feature not implemented yet",
     "NO_LINKBUTTON": "link button not pressed",
+    "NOT_LOGGED_IN": "user has not yet authenticated using /authenticate, or 'user' cookie was malformed",
+    "INVALID_PASSWORD": "the supplied password was invalid",
+    "AUTH_NOT_ENABLED": "authentication is not enabled for this server instance",
     "INVALID_NAME": "user name is too short"
 }
 
