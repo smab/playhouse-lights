@@ -22,6 +22,12 @@ import playhouse
 CONFIG = "config.json"
 BRIDGE_CONFIG = "bridge_setup.json"
 
+config = {
+    "port": 4711,
+    "require_password": False,
+    "password": None,
+    "ssl": False
+}
 
 class AuthenticationHandler(tornado.web.RequestHandler):
     def get_current_user(self):
@@ -39,7 +45,7 @@ def return_json(func):
 
 def authenticated(func):
     def new_func(self, *args, **kwargs):
-        if require_password and not self.current_user:
+        if config['require_password'] and not self.current_user:
             return errorcodes.NOT_LOGGED_IN
         else:
             return func(self, *args, **kwargs)
@@ -332,25 +338,38 @@ class BridgesSaveHandler(AuthenticationHandler):
     @return_json
     @authenticated
     def post(self):
-        with open(BRIDGE_CONFIG, 'r+') as f:
-            conf = tornado.escape.json_decode(f.read())
-            conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
-            conf['usernames'] = {bridge.serial_number: bridge.username for bridge in grid.bridges.values()}
-            f.seek(0)
+        try:
+            with open(BRIDGE_CONFIG, 'r') as f:
+                conf = tornado.escape.json_decode(f.read())
+        except (FileNotFoundError, ValueError):
+            logging.warning("%s not found or contained invalid JSON, creating new file", BRIDGE_CONFIG)
+            conf = {}
+        
+        conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
+        conf['usernames'] = {bridge.serial_number: bridge.username for bridge in grid.bridges.values()}
+        
+        with open(BRIDGE_CONFIG, 'w') as f:
             f.write(tornado.escape.json_encode(conf))
-            f.truncate()
+        
         return {"state": "success"}
 
 class GridSaveHandler(AuthenticationHandler):
     @return_json
     @authenticated
     def post(self):
-        with open(BRIDGE_CONFIG, 'r+') as f:
-            conf = tornado.escape.json_decode(f.read())
+        try:
+            with open(BRIDGE_CONFIG, 'r') as f:
+                conf = tornado.escape.json_decode(f.read())
+        except (FileNotFoundError, ValueError):
+            logging.warning("%s not found or contained invalid JSON, creating new file", BRIDGE_CONFIG)
+            conf = {}
+        
+        conf['grid'] = grid.grid
+        
+        with open(BRIDGE_CONFIG, 'w') as f:
             conf['grid'] = grid.grid
-            f.seek(0)
-            f.write(tornado.escope.json_encode(conf))
-            f.truncate()
+            f.write(tornado.escape.json_encode(conf))
+        
         return {"state": "success"}
         
 class DebugHandler(tornado.web.RequestHandler):
@@ -409,8 +428,8 @@ class AuthenticateHandler(tornado.web.RequestHandler):
     @json_parser
     @json_validator({"password": str, "username": str})
     def post(self, data):
-        if require_password:
-            if data['password'] == password:
+        if config['require_password']:
+            if data['password'] == config['password']:
                 self.set_secure_cookie('user', data['username'])
                 return {"state": "success"}
             else:
@@ -449,24 +468,27 @@ application = tornado.web.Application([
 
 def init_lightgrid():
     
-    logging.info("Reading configuration file")
-    
-    with open(BRIDGE_CONFIG, 'r') as file:
-        config = tornado.escape.json_decode(file.read())
-        logging.debug("Configuration was %s", config)
-        
-        config["grid"] = [ [ (x[0], x[1]) for x in row ] for row in config["grid"] ]
-        logging.debug("Constructed grid %s", config["grid"])
+    logging.info("Reading bridge setup file (%s)", BRIDGE_CONFIG)
+    bridge_config = {"grid": [], "usernames": {}, "ips": []}
+    try:
+        with open(BRIDGE_CONFIG, 'r') as file:
+            bridge_config.update(tornado.escape.json_decode(file.read()))
+            logging.debug("Configuration was %s", bridge_config)
+            
+            bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
+            logging.debug("Constructed grid %s", bridge_config["grid"])
+    except (FileNotFoundError, ValueError):
+        logging.warning("%s not found or contained invalid JSON, using empty grid", BRIDGE_CONFIG)
     
     logging.debug("Instatiating LightGrid")
-    grid = playhouse.LightGrid(config["usernames"], config["grid"], buffered=True)
+    grid = playhouse.LightGrid(bridge_config["usernames"], bridge_config["grid"], buffered=True)
     
     logging.info("Adding preconfigured bridges")
-    for ip in config["ips"]:
+    for ip in bridge_config["ips"]:
         try:
             bridge = grid.add_bridge(ip)
             logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
-        except Exception as e:
+        except:
             logging.warning("Couldn't find a bridge at %s", ip)
             logging.debug("", exc_info=True)
     logging.info("Finished adding bridges")
@@ -498,28 +520,29 @@ if __name__ == "__main__":
     
     grid = init_lightgrid()
     
+    logging.info("Reading configuration file (%s)", CONFIG)
     
-    configuration = json.load(open(CONFIG))
+    try:
+        config.update(json.load(open(CONFIG)))
+    except FileNotFoundError:
+        logging.warning("%s not found, using default configuration values", CONFIG)
     
-    require_password = configuration['require_password']
-    if require_password:
+    if config['require_password']:
         logging.info("This instance will require authentication")
-        password = configuration['password']
     else:
         logging.warning("This instance will NOT require authentication")
-        password = None
     
-    if configuration['ssl']:
+    if config['ssl']:
         logging.info("Setting up HTTPS server")
         http_server = tornado.httpserver.HTTPServer(application, ssl_options={
-            "certfile": configuration['certfile'],
-            "keyfile": configuration['keyfile']
+            "certfile": config['certfile'],
+            "keyfile": config['keyfile']
         })
     else:
         logging.info("Setting up HTTP server")
         http_server = tornado.httpserver.HTTPServer(application)
     
-    http_server.listen(configuration['port'])
+    http_server.listen(config['port'])
     
-    logging.info("Server now listening at port %s", configuration['port'])
+    logging.info("Server now listening at port %s", config['port'])
     tornado.ioloop.IOLoop.instance().start()
