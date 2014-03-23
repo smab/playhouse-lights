@@ -100,6 +100,7 @@ class LightsHandler(AuthenticationHandler):
     @authenticated
     @parse_json([{"x": int, "y": int, "?delay": float, "change": dict}])
     def post(self, data):
+        @tornado.gen.coroutine
         def set_state(light, do_commit=False):
             try:
                 grid.set_state(light['x'], light['y'], **light['change'])
@@ -111,7 +112,7 @@ class LightsHandler(AuthenticationHandler):
                 logging.debug("", exc_info=True)
             
             if do_commit:
-                grid.commit()
+                yield grid.commit()
         
         for light in data:
             if "delay" in light:
