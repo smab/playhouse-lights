@@ -141,17 +141,20 @@ class BridgesHandler(AuthenticationHandler):
     @return_as_json
     @authenticated
     def get(self):
+        lights = yield {mac: bridge.get_lights()
+                        for mac, bridge in grid.bridges.items()
+                        if bridge.logged_in}
         res = {
+            "state": "success",
             "bridges": {
                 mac: {
                     "ip": bridge.ipaddress,
                     "username": bridge.username,
                     "valid_username": bridge.logged_in,
-                    "lights": len((yield bridge.get_lights())) if bridge.logged_in else -1
+                    "lights": len(lights[mac]) if bridge.logged_in else -1
                 }
                 for mac, bridge in grid.bridges.items()
-            },
-            "state": "success"
+            }
         }
         return res
 
@@ -168,14 +171,18 @@ class BridgesAddHandler(AuthenticationHandler):
             return errorcodes.BRIDGE_ALREADY_ADDED
         except:
             return errorcodes.BRIDGE_NOT_FOUND.format(ip=data['ip'])
-        return {"state": "success",
-                "bridges": {
-                    bridge.serial_number: {
-                        "ip": bridge.ipaddress,
-                        "username": bridge.username,
-                        "valid_username": bridge.logged_in,
-                        "lights": len((yield bridge.get_lights())) if bridge.logged_in else -1
-                    }}}
+        return {
+            "state": "success",
+            "bridges": {
+                bridge.serial_number: {
+                    "ip": bridge.ipaddress,
+                    "username": bridge.username,
+                    "valid_username": bridge.logged_in,
+                    "lights": len((yield bridge.get_lights())) if bridge.logged_in else -1
+                }
+            }
+        }
+
 
 class BridgesMacHandler(AuthenticationHandler):
     @tornado.gen.coroutine
@@ -279,21 +286,40 @@ class BridgesSearchHandler(AuthenticationHandler):
             nonlocal data
             event.set()
             
-            logging.info("Running bridge discovery")
-            new_bridges = playhouse.discover()
-            logging.debug("Bridges found: %s", new_bridges)
+            logging.debug("Constructing IOLoop for discovery thread")
+            io_loop = tornado.ioloop.IOLoop()
             
+            logging.info("Running bridge discovery")
+            future = playhouse.discover()
+            def stop_loop(*args, **kwargs):
+                io_loop.stop()
+            io_loop.add_future(future, stop_loop)
+            io_loop.start() # wait until finished
+            
+            new_bridges = future.result()
+            logging.debug("Bridges found: %s", new_bridges)
             last_search = int(time.time())
-            if data['auto_add']:
-                logging.info("Auto-adding bridges")
-                for b in new_bridges:
-                    try:
-                        grid.add_bridge(b)
-                        logging.info("Added %s", b.serial_number)
-                    except playhouse.BridgeAlreadyAddedException:
-                        logging.info("%s already added", b.serial_number)
+            
             logging.info("Bridge discovery finished")
-            event.clear()
+            
+            if data['auto_add']:
+                @tornado.gen.coroutine
+                def auto_add(bridges):
+                    logging.info("Auto-adding bridges")
+                    for b in bridges:
+                        try:
+                            yield grid.add_bridge(b)
+                            logging.info("Added %s", b.serial_number)
+                        except playhouse.BridgeAlreadyAddedException:
+                            logging.info("%s already added", b.serial_number)
+                    logging.info("Finished auto-adding bridges")
+                    event.clear()
+                # add bridges in main thread
+                tornado.ioloop.IOLoop.instance().add_callback(auto_add, new_bridges)
+            else:
+                event.clear()
+        
+        
         thread = threading.Thread()
         thread.run = myfunc
         thread.start()
@@ -307,17 +333,19 @@ class BridgesSearchHandler(AuthenticationHandler):
         if event.is_set():
             return errorcodes.CURRENTLY_SEARCHING
         
+        lights = yield {bridge.serial_number: bridge.get_lights()
+                        for bridge in new_bridges if bridge.logged_in}
         return {
             "state": "success",
             "finished": last_search,
             "bridges": {
-                b.serial_number: {
+                bridge.serial_number: {
                     "ip": b.ipaddress,
                     "username": b.username,
                     "valid_username": b.logged_in,
-                    "lights": len(b.get_lights()) if b.logged_in else -1
+                    "lights": len(lights[bridge.serial_number]) if bridge.logged_in else -1
                 }
-                for b in new_bridges
+                for bridge in new_bridges
             }
         }
 

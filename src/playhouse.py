@@ -338,9 +338,9 @@ class LightGrid:
         logging.debug("Got results %s", res)
         logging.debug("Got exceptions %s", exceptions)
         return exceptions
-        
 
 
+@tornado.gen.coroutine
 def discover(attempts=2, timeout=2):
     socket.setdefaulttimeout(timeout)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -386,7 +386,7 @@ def discover(attempts=2, timeout=2):
     for loc in locations:
         try:
             logging.debug("Attempting to find a bridge at %s", loc)
-            bridges.append(Bridge.create_bridge(loc))
+            bridges.append((yield Bridge.create_bridge(loc)))
             logging.debug("Bridge found")
         except:
             logging.debug("Bridge not found", exc_info=True)
