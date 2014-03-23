@@ -3,6 +3,7 @@ import collections
 import copy
 import http.client
 import io
+import itertools
 import json
 import logging
 import socket
@@ -11,6 +12,7 @@ import urllib.parse
 import urllib.request
 from xml.etree import ElementTree
 
+import tornado.concurrent
 import tornado.escape
 import tornado.gen
 import tornado.httpclient
@@ -44,6 +46,44 @@ class UnknownBridgeException(Exception):
     def __init__(self, mac):
         self.mac = mac
 
+
+
+class ExceptionCatcher(tornado.gen.YieldPoint):
+    """Runs multiple asynchronous operations in parallel until each operation
+    has either completed or raised an exception.
+
+    Takes a dictionary of ``Tasks`` or other ``YieldPoints`` and returns a
+    (results, exceptions) tuple, where results and exceptions are dictionaries
+    with the same keys as the given dictionary, and the operation result or
+    the exception object that the operation raised respectively as values.
+    """
+    def __init__(self, children):
+        self.children = children
+        for k, v in self.children.items():
+            if isinstance(v, tornado.concurrent.Future):
+                self.children[k] = tornado.gen.YieldFuture(v)
+        assert all(isinstance(v, tornado.gen.YieldPoint) for v in self.children.values())
+        self.unfinished_children = set(self.children)
+
+    def start(self, runner):
+        for v in self.children.values():
+            v.start(runner)
+
+    def is_ready(self):
+        finished = list(itertools.takewhile(
+            lambda k: self.children[k].is_ready(), self.unfinished_children))
+        self.unfinished_children.difference_update(finished)
+        return not self.unfinished_children
+
+    def get_result(self):
+        exceptions = {}
+        results = {}
+        for k, v in self.children.items():
+            try:
+                results[k] = v.get_result()
+            except Exception as e:
+                exceptions[k] = e
+        return results, exceptions
 
 
 class Bridge:
@@ -253,47 +293,51 @@ class LightGrid:
         args -- State argument, see Philips Hue documentation
         
         """
-        if x >= self.width or y >= self.height:
-            raise OutsideGridException
         
-        mac = self.grid[y][x][0]
-        if mac not in self.bridges:
-            raise NoBridgeAtCoordinateException
-        
-        row = self.grid[y]
-        cell = row[x]
-        self.buffer[cell].update(args)
+        self.buffer[(x, y)].update(args)
 #        for k, v in args.items():
 #                if self.state[cell].get(k) == v:
 #                    del self.buffer[cell][k]
         if not self.buffered:
-            yield self.commit()
+            exceptions = yield self.commit()
+            if len(exceptions) > 0:
+                # pass on first (and only, since this grid isn't buffered) exception
+                raise next(iter(exceptions.values()))
     
     @tornado.gen.coroutine
     def set_all(self, **args):
-        keys = []
-        for bridge in self.bridges.values():
-            bridge.set_group(0, callback=(yield tornado.gen.Callback(bridge)), **args)
-            keys.append(bridge)
-        # TODO: get exceptions
-        results = yield tornado.gen.WaitAll(keys)
+        res, exc = yield ExceptionCatcher({bridge.serial_number: bridge.set_group(0, **args)
+                                           for bridge in self.bridges.values()})
+        return exc
+    
     
     @tornado.gen.coroutine
     def commit(self):
         """Commit saved state changes to the lamps"""
-        keys = []
         
-        for k, v in self.buffer.items():
-            if len(v) != 0:
-                mac, n = k
+        futures = {}
+        exceptions = {}
+        for (x, y), changes in self.buffer.items():
+            try:
+                if x >= self.width or y >= self.height:
+                    raise OutsideGridException
+                
+                mac, light = self.grid[y][x]
+                if mac not in self.bridges:
+                    raise NoBridgeAtCoordinateException
+                
                 bridge = self.bridges[mac]
-                bridge.set_state(n, callback=(yield tornado.gen.Callback((bridge, n))), **v)
-                keys.append((bridge, n))
+                futures[(x, y)] = bridge.set_state(light, **changes)
+            except Exception as e:
+                exceptions[(x, y)] = e
         
         self.buffer.clear()
-        # TODO: get exceptions
-        results = yield tornado.gen.WaitAll(keys)
-        logging.debug("Waited for %s", results)
+        
+        res, exc = yield ExceptionCatcher(futures)
+        exceptions.update(exc)
+        logging.debug("Got results %s", res)
+        logging.debug("Got exceptions %s", exceptions)
+        return exceptions
         
 
 
