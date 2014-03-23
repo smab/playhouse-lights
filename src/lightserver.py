@@ -33,36 +33,25 @@ class AuthenticationHandler(tornado.web.RequestHandler):
     def get_current_user(self):
         return self.get_secure_cookie("user")
 
-def return_json(func):
-    def new_func(self, *args, **kwargs):
-        self.set_header("Content-Type", "application/json")
-        data = func(self, *args, **kwargs)
-        logging.debug("Sent response %s", data)
-        if data is not None:
-            self.write(tornado.escape.json_encode(data))
-            self.finish()
-    return new_func
-
 def authenticated(func):
+    @functools.wraps(func)
     def new_func(self, *args, **kwargs):
         if config['require_password'] and not self.current_user:
             return errorcodes.NOT_LOGGED_IN
         else:
-            return func(self, *args, **kwargs)
+            return (yield from func(self, *args, **kwargs))
     return new_func
 
-def json_parser(func):
-    def new_post(self, *args, **kwargs):
-        try:
-            data = tornado.escape.json_decode(self.request.body)
-            return func(self, data, *args, **kwargs)
-        except UnicodeDecodeError:
-            return errorcodes.NOT_UNICODE
-        except ValueError:
-            return errorcodes.INVALID_JSON
-    return new_post
+def return_as_json(func):
+    @functools.wraps(func)
+    def new_func(self, *args, **kwargs):
+        self.set_header("Content-Type", "application/json")
+        data = yield from func(self, *args, **kwargs)
+        logging.debug("Sent response %s", data)
+        self.write(tornado.escape.json_encode(data))
+    return new_func
 
-def json_validator(jformat):
+def parse_json(jformat):
     def decorator(func):
         def is_valid(data, jf):
             logging.debug("Testing %s vs %s", repr(data), jf)
@@ -78,25 +67,32 @@ def json_validator(jformat):
                    (type(jf) is set and type(data) in jf) or \
                    (type(jf) is type and type(data) is jf)
         
-        def new_func(self, data, *args, **kwargs):
-            logging.debug("Got request %s", data)
-            if is_valid(data, jformat):
-                return func(self, data, *args, **kwargs)
-            else:
-                logging.debug("Request was invalid")
-                return errorcodes.INVALID_FORMAT
         
+        @functools.wraps(func)
+        def new_func(self, *args, **kwargs):
+            try:
+                data = tornado.escape.json_decode(self.request.body)
+                logging.debug("Got request %s", data)
+                
+                if (is_valid(data, jformat)):
+                    return (yield from func(self, data, *args, **kwargs))
+                else:
+                    logging.debug("Request was invalid")
+                    return errorcodes.INVALID_FORMAT
+                
+            except UnicodeDecodeError:
+                return errorcodes.NOT_UNICODE
+            except ValueError:
+                return errorcodes.INVALID_JSON
         return new_func
-    
     return decorator
 
 
 class LightsHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator([{"x": int, "y": int, "?delay": float, "change": dict}])
-    @tornado.web.asynchronous
+    @parse_json([{"x": int, "y": int, "?delay": float, "change": dict}])
     def post(self, data):
         def set_state(light, do_commit=False):
             try:
@@ -119,27 +115,23 @@ class LightsHandler(AuthenticationHandler):
             else:
                 set_state(light)
         
-        tornado.ioloop.IOLoop.current().add_future(grid.commit(), self.commit_finished)
-    
-    @return_json
-    def commit_finished(self, result):
+        yield grid.commit()
         return {"state": "success"}
 
+
 class LightsAllHandler(AuthenticationHandler):
-    #@return_json
-    #@authenticated
-    #@json_parser
-    #@json_validator(dict)
     @tornado.gen.coroutine
-    def post(self):#, data):
-        data = tornado.escape.json_decode(self.request.body)
+    @return_as_json
+    @authenticated
+    @parse_json(dict)
+    def post(self, data):
         yield grid.set_all(**data)
         yield grid.commit()
-        self.write('{"state":"success"}')
-#        return {"state": "success"}
+        return {"state": "success"}
 
 class BridgesHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def get(self):
         res = {
@@ -157,10 +149,10 @@ class BridgesHandler(AuthenticationHandler):
         return res
 
 class BridgesAddHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator({"ip": str, "?username": {str, type(None)}})
+    @parse_json({"ip": str, "?username": {str, type(None)}})
     def post(self, data):
         try:
             username = data.get("username", None)
@@ -179,17 +171,18 @@ class BridgesAddHandler(AuthenticationHandler):
                     }}}
 
 class BridgesMacHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator({"username": {str, type(None)}})
+    @parse_json({"username": {str, type(None)}})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         grid.bridges[mac].set_username(data['username'])
         return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
 
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def delete(self, mac):
         if mac not in grid.bridges:
@@ -200,10 +193,10 @@ class BridgesMacHandler(AuthenticationHandler):
 
 
 class BridgeLightsHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator([{"light": int, "change": dict}])
+    @parse_json([{"light": int, "change": dict}])
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -215,10 +208,10 @@ class BridgeLightsHandler(AuthenticationHandler):
 
 
 class BridgeLightsAllHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator(dict)
+    @parse_json(dict)
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -229,7 +222,8 @@ class BridgeLightsAllHandler(AuthenticationHandler):
 
 
 class BridgeLampSearchHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def post(self, mac):        
         if mac not in grid.bridges:
@@ -239,10 +233,10 @@ class BridgeLampSearchHandler(AuthenticationHandler):
 
 
 class BridgeAddUserHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator({"?username": str})
+    @parse_json({"?username": str})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -265,10 +259,10 @@ new_bridges = []
 last_search = -1
 
 class BridgesSearchHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator({"auto_add":bool})
+    @parse_json({"auto_add":bool})
     def post(self, data):
         if event.is_set():
             return errorcodes.CURRENTLY_SEARCHING
@@ -299,7 +293,8 @@ class BridgesSearchHandler(AuthenticationHandler):
         
         return {"state": "success"}
     
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def get(self):
         if event.is_set():
@@ -321,24 +316,26 @@ class BridgesSearchHandler(AuthenticationHandler):
 
 
 class GridHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
-    @json_parser
-    @json_validator([[{"mac": str, "lamp": int}]])
+    @parse_json([[{"mac": str, "lamp": int}]])
     def post(self, data):
         g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
         grid.set_grid(g)
         logging.debug("Grid is set to %s", g)
         return {"state": "success"}
             
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def get(self):
         data = [[{"mac": mac, "lamp": lamp} for mac, lamp in row] for row in grid.grid]
         return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
 
 class BridgesSaveHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def post(self):
         try:
@@ -357,7 +354,8 @@ class BridgesSaveHandler(AuthenticationHandler):
         return {"state": "success"}
 
 class GridSaveHandler(AuthenticationHandler):
-    @return_json
+    @tornado.gen.coroutine
+    @return_as_json
     @authenticated
     def post(self):
         try:
@@ -427,9 +425,9 @@ function send_post(){
 
 
 class AuthenticateHandler(tornado.web.RequestHandler):
-    @return_json
-    @json_parser
-    @json_validator({"password": str, "username": str})
+    @tornado.gen.coroutine
+    @return_as_json
+    @parse_json({"password": str, "username": str})
     def post(self, data):
         if config['require_password']:
             if data['password'] == config['password']:
