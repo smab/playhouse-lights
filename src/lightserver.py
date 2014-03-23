@@ -126,14 +126,17 @@ class LightsHandler(AuthenticationHandler):
         return {"state": "success"}
 
 class LightsAllHandler(AuthenticationHandler):
-    @return_json
-    @authenticated
-    @json_parser
-    @json_validator(dict)
-    def post(self, data):
-        grid.set_all(**data)
-        grid.commit()
-        return {"state": "success"}
+    #@return_json
+    #@authenticated
+    #@json_parser
+    #@json_validator(dict)
+    @tornado.gen.coroutine
+    def post(self):#, data):
+        data = tornado.escape.json_decode(self.request.body)
+        yield grid.set_all(**data)
+        yield grid.commit()
+        self.write('{"state":"success"}')
+#        return {"state": "success"}
 
 class BridgesHandler(AuthenticationHandler):
     @return_json
@@ -466,8 +469,9 @@ application = tornado.web.Application([
 ], cookie_secret=os.urandom(256))
 
 
-def init_lightgrid():
-    
+@tornado.gen.coroutine
+def init_lightgrid(grid):
+    logging.info("Initializing the LightGrid")
     logging.info("Reading bridge setup file (%s)", BRIDGE_CONFIG)
     bridge_config = {"grid": [], "usernames": {}, "ips": []}
     try:
@@ -480,21 +484,18 @@ def init_lightgrid():
     except (FileNotFoundError, ValueError):
         logging.warning("%s not found or contained invalid JSON, using empty grid", BRIDGE_CONFIG)
     
-    logging.debug("Instatiating LightGrid")
-    grid = playhouse.LightGrid(bridge_config["usernames"], bridge_config["grid"], buffered=True)
+    grid.set_usernames(bridge_config["usernames"])
+    grid.set_grid(bridge_config["grid"])
     
     logging.info("Adding preconfigured bridges")
     for ip in bridge_config["ips"]:
         try:
-            bridge = grid.add_bridge(ip)
+            bridge = yield grid.add_bridge(ip)
             logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
         except:
             logging.warning("Couldn't find a bridge at %s", ip)
             logging.debug("", exc_info=True)
     logging.info("Finished adding bridges")
-    
-    return grid
-
 
 
 if __name__ == "__main__":
@@ -518,7 +519,9 @@ if __name__ == "__main__":
     
     logging.info("Initializing light server")
     
-    grid = init_lightgrid()
+    logging.info("Creating empty LightGrid")
+    grid = playhouse.LightGrid(buffered=True)
+    tornado.ioloop.IOLoop.instance().add_callback(init_lightgrid, grid)
     
     logging.info("Reading configuration file (%s)", CONFIG)
     

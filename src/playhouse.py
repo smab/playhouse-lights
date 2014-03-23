@@ -18,7 +18,7 @@ try:
     import tornado.curl_httpclient
     tornado.httpclient.AsyncHTTPClient.configure(tornado.curl_httpclient.CurlAsyncHTTPClient)
 except ImportError:
-    pass # use default implementation
+    pass # use slower default implementation
 
 
 class BridgeAlreadyAddedException(Exception):
@@ -48,20 +48,21 @@ class UnknownBridgeException(Exception):
 
 class Bridge:
     
-    def __init__(self, ip, username=None, defaults={"transitiontime": 0}, timeout=2):
-        self.defaults = defaults
-        self.username = username
-        self.ipaddress = ip
-        #self.bridge = http.client.HTTPConnection(ip, timeout=2)
-        self.bridge_async = tornado.httpclient.AsyncHTTPClient()
-        self.bridge_sync = tornado.httpclient.HTTPClient()
-        self.timeout = timeout
+    @classmethod
+    @tornado.gen.coroutine
+    def create_bridge(cls, ip, username=None, defaults={"transitiontime": 0}, timeout=2):
+        bridge = cls()
+        bridge.defaults = defaults
+        bridge.username = username
+        bridge.ipaddress = ip
+        bridge.client = tornado.httpclient.AsyncHTTPClient()
+        bridge.timeout = timeout
         
         try:
-            if self.send_request("GET", "/config")['name'] != "Philips hue":
+            if (yield bridge.send_request("GET", "/config"))['name'] != "Philips hue":
                 raise Exception()
             
-            res = self.http_request("GET", "/description.xml")
+            res = yield bridge.http_request("GET", "/description.xml")
             if res.code != 200:
                 raise Exception()
             
@@ -70,44 +71,36 @@ class Bridge:
             if desc.text != "Philips hue Personal Wireless Lighting":
                 raise Exception()
             
-            self.serial_number = et.find('./default:device/default:serialNumber', namespaces=ns).text
+            bridge.serial_number = et.find('./default:device/default:serialNumber', namespaces=ns).text
         except:
             raise Exception("{}: not a Philips Hue bridge".format(ip))
         
-        self.update_info()
-    
+        yield bridge.update_info()
+        
+        return bridge
     
     def set_defaults(self, defaults):
         self.defaults = defaults
     
-    def http_request(self, method, url, body=None, callback=None):
-        logging.debug("Sending %s request %s %s (data: %s) to %s", "async" if callback is not None else "sync",
+    @tornado.gen.coroutine
+    def http_request(self, method, url, body=None):
+        logging.debug("Sending request %s %s (data: %s) to %s",
                       method, url, body, self.ipaddress)
-        if callback is not None:
-            def fetch_result(response):
-                # TODO: the fuck do we do with the responses here?
-                logging.debug("Async response from bridge: %s", response)
-                callback(self.serial_number)
-                pass
-            self.bridge_async.fetch("http://{}{}".format(self.ipaddress, url), fetch_result,
-                                    method=method, body=body, request_timeout=self.timeout)
-        else:
-            response = self.bridge_sync.fetch("http://{}{}".format(self.ipaddress, url),
-                                          method=method, body=body, request_timeout=self.timeout)
-            logging.debug("Sync response from bridge: %s", response)
-            return response
-        
+        response = yield self.client.fetch("http://{}{}".format(self.ipaddress, url),
+                                           method=method, body=body, request_timeout=self.timeout)
+        logging.debug("Response from bridge: %s", response)
+        return response
     
-    def send_raw(self, method, url, body=None, callback=None):
+    @tornado.gen.coroutine
+    def send_raw(self, method, url, body=None):
         if body is not None:
             body = json.dumps(body)
         
-        res = self.http_request(method, url, body, callback)
+        res = yield self.http_request(method, url, body)
         if res is None:
             return
-        res = tornado.escape.json_decode(res.body)
         
-        #res = json.loads(self.bridge.getresponse().read().decode('utf-8'))
+        res = tornado.escape.json_decode(res.body)
         
         exceptions = {
             101: NoLinkButtonPressedException
@@ -119,14 +112,16 @@ class Bridge:
         
         return res
     
-    def send_request(self, method, url, body=None, callback=None):
+    @tornado.gen.coroutine
+    def send_request(self, method, url, body=None):
         user = self.username
         if user is None:
             user = "none"
         
-        return self.send_raw(method, "/api/{}{}".format(user, url), body, callback=callback)
+        return (yield self.send_raw(method, "/api/{}{}".format(user, url), body))
     
-    def _set_state(self, url, args, callback=None):
+    @tornado.gen.coroutine
+    def _set_state(self, url, args):
         defs = self.defaults.copy()
         defs.update(args)
         
@@ -134,41 +129,49 @@ class Bridge:
             defs['xy'] = rgb2xy(*defs['rgb'])
             del defs['rgb']
         
-        return self.send_request("PUT", url, body=defs, callback=callback)
+        return (yield self.send_request("PUT", url, body=defs))
     
-    def set_state(self, i, callback=None, **args):
-        return self._set_state('/lights/{}/state'.format(i), args, callback=callback)
+    @tornado.gen.coroutine
+    def set_state(self, i, **args):
+        return (yield self._set_state('/lights/{}/state'.format(i), args))
     
-    def set_group(self, i, callback=None, **args):
-        return self._set_state('/groups/{}/action'.format(i), args, callback=callback)
+    @tornado.gen.coroutine
+    def set_group(self, i, **args):
+        return (yield self._set_state('/groups/{}/action'.format(i), args))
     
+    @tornado.gen.coroutine
     def get_lights(self):
-        return self.send_request("GET", "/lights")
+        return (yield self.send_request("GET", "/lights"))
     
+    @tornado.gen.coroutine
     def get_new_lights(self):
-        return self.send_request("GET", "/lights/new")
+        return (yield self.send_request("GET", "/lights/new"))
     
+    @tornado.gen.coroutine
     def search_lights(self):
-        return self.send_request("POST", "/lights")
+        return (yield self.send_request("POST", "/lights"))
     
+    @tornado.gen.coroutine
     def get_bridge_info(self):
-        return self.send_request("GET", "/")
+        return (yield self.send_request("GET", "/"))
     
+    @tornado.gen.coroutine
     def set_username(self, username):
         self.username = username
-        self.update_info()
+        yield self.update_info()
     
+    @tornado.gen.coroutine
     def create_user(self, devicetype, username=None):
         body = {'devicetype': devicetype}
         if username is not None:
             body['username'] = username
-        res = self.send_raw("POST", "/api", body)[0]
-        self.username = res['success']['username']
-        self.update_info()
+        res = (yield self.send_raw("POST", "/api", body))[0]
+        yield self.set_username(res['success']['username'])
         return self.username
     
+    @tornado.gen.coroutine
     def update_info(self):
-        info = self.send_request("GET", "/config")
+        info = yield self.send_request("GET", "/config")
         
         if self.username is None or 'mac' not in info:
             self.logged_in = False
@@ -212,12 +215,13 @@ class LightGrid:
 #                self.state[(mac, int(k))] = v["state"]
                     
     
+    @tornado.gen.coroutine
     def add_bridge(self, ip_address_or_bridge, username=None):
         # can take an already instantiated bridge instance
         if type(ip_address_or_bridge) is Bridge:
             bridge = ip_address_or_bridge
         else:
-            bridge = Bridge(ip_address_or_bridge, username, self.defaults)
+            bridge = yield Bridge.create_bridge(ip_address_or_bridge, username, self.defaults)
         
         if bridge.serial_number in self.bridges:
             raise BridgeAlreadyAddedException()
@@ -227,16 +231,20 @@ class LightGrid:
         self.bridges[bridge.serial_number] = bridge
         return bridge
     
+    def set_usernames(self, usernames):
+        self.usernames = usernames
+    
     def set_grid(self, grid):
-        for row in grid:
-            for (mac, lamp) in row:
-                pass
+        #for row in grid:
+        #    for (mac, lamp) in row:
+        #        pass
         #        if mac not in self.bridges:
         #            raise UnknownBridgeException
         self.grid = grid
         self.height = len(self.grid)
         self.width = max(len(x) for x in self.grid) if self.height > 0 else 0
     
+    @tornado.gen.coroutine
     def set_state(self, x, y, **args):
         """Set the state for a specific lamp. If this grid is buffered, the state will not be sent to the lamp directly.
         
@@ -259,15 +267,16 @@ class LightGrid:
 #                if self.state[cell].get(k) == v:
 #                    del self.buffer[cell][k]
         if not self.buffered:
-            self.commit()
+            yield self.commit()
     
+    @tornado.gen.coroutine
     def set_all(self, **args):
+        keys = []
         for bridge in self.bridges.values():
-            try:
-                bridge.set_group(0, **args)
-            except HueAPIException:
-                # TODO: do something with the exception
-                pass
+            bridge.set_group(0, callback=(yield tornado.gen.Callback(bridge)), **args)
+            keys.append(bridge)
+        # TODO: get exceptions
+        results = yield tornado.gen.WaitAll(keys)
     
     @tornado.gen.coroutine
     def commit(self):
@@ -278,15 +287,11 @@ class LightGrid:
             if len(v) != 0:
                 mac, n = k
                 bridge = self.bridges[mac]
-                try:
-                    bridge.set_state(n, callback=(yield tornado.gen.Callback((bridge, n))), **v)
-                    keys.append((bridge, n))
-                except HueAPIException:
-                    # TODO: do something with the exception
-                    pass
+                bridge.set_state(n, callback=(yield tornado.gen.Callback((bridge, n))), **v)
+                keys.append((bridge, n))
         
         self.buffer.clear()
-        
+        # TODO: get exceptions
         results = yield tornado.gen.WaitAll(keys)
         logging.debug("Waited for %s", results)
         
@@ -337,7 +342,7 @@ def discover(attempts=2, timeout=2):
     for loc in locations:
         try:
             logging.debug("Attempting to find a bridge at %s", loc)
-            bridges.append(Bridge(loc))
+            bridges.append(Bridge.create_bridge(loc))
             logging.debug("Bridge found")
         except:
             logging.debug("Bridge not found", exc_info=True)
