@@ -1,6 +1,7 @@
 
 import datetime
 import functools
+import inspect
 import json
 import logging
 import os
@@ -39,14 +40,18 @@ def authenticated(func):
         if config['require_password'] and not self.current_user:
             return errorcodes.NOT_LOGGED_IN
         else:
-            return (yield from func(self, *args, **kwargs))
+            #return (yield from func(self, *args, **kwargs))
+            return func(self, *args, **kwargs)
     return new_func
 
 def return_as_json(func):
     @functools.wraps(func)
     def new_func(self, *args, **kwargs):
         self.set_header("Content-Type", "application/json")
-        data = yield from func(self, *args, **kwargs)
+        data = func(self, *args, **kwargs)
+        if inspect.isgenerator(data):
+            data = yield from data
+        
         logging.debug("Sent response %s", data)
         self.write(tornado.escape.json_encode(data))
     return new_func
@@ -75,7 +80,8 @@ def parse_json(jformat):
                 logging.debug("Got request %s", data)
                 
                 if (is_valid(data, jformat)):
-                    return (yield from func(self, data, *args, **kwargs))
+                    #return (yield from func(self, data, *args, **kwargs))
+                    return func(self, data, *args, **kwargs)
                 else:
                     logging.debug("Request was invalid")
                     return errorcodes.INVALID_FORMAT
@@ -325,7 +331,7 @@ class GridHandler(AuthenticationHandler):
         grid.set_grid(g)
         logging.debug("Grid is set to %s", g)
         return {"state": "success"}
-            
+    
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
