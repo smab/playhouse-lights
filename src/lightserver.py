@@ -147,7 +147,7 @@ class BridgesHandler(AuthenticationHandler):
                     "ip": bridge.ipaddress,
                     "username": bridge.username,
                     "valid_username": bridge.logged_in,
-                    "lights": len(bridge.get_lights()) if bridge.logged_in else -1
+                    "lights": len((yield bridge.get_lights())) if bridge.logged_in else -1
                 }
                 for mac, bridge in grid.bridges.items()
             },
@@ -163,7 +163,7 @@ class BridgesAddHandler(AuthenticationHandler):
     def post(self, data):
         try:
             username = data.get("username", None)
-            bridge = grid.add_bridge(data['ip'], username)
+            bridge = yield grid.add_bridge(data['ip'], username)
         except playhouse.BridgeAlreadyAddedException:
             return errorcodes.BRIDGE_ALREADY_ADDED
         except:
@@ -174,7 +174,7 @@ class BridgesAddHandler(AuthenticationHandler):
                         "ip": bridge.ipaddress,
                         "username": bridge.username,
                         "valid_username": bridge.logged_in,
-                        "lights": len(bridge.get_lights()) if bridge.logged_in else -1
+                        "lights": len((yield bridge.get_lights())) if bridge.logged_in else -1
                     }}}
 
 class BridgesMacHandler(AuthenticationHandler):
@@ -185,7 +185,7 @@ class BridgesMacHandler(AuthenticationHandler):
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        grid.bridges[mac].set_username(data['username'])
+        yield grid.bridges[mac].set_username(data['username'])
         return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
 
     @tornado.gen.coroutine
@@ -209,7 +209,7 @@ class BridgeLightsHandler(AuthenticationHandler):
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         
         for light in data:
-            grid.bridges[mac].set_state(light['light'], **light['change'])
+            yield grid.bridges[mac].set_state(light['light'], **light['change'])
         
         return {'state': 'success'}
 
@@ -223,7 +223,7 @@ class BridgeLightsAllHandler(AuthenticationHandler):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         
-        grid.bridges[mac].set_group(0, **data)
+        yield grid.bridges[mac].set_group(0, **data)
         
         return {'state': 'success'}
 
@@ -235,7 +235,7 @@ class BridgeLampSearchHandler(AuthenticationHandler):
     def post(self, mac):        
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        grid.bridges[mac].search_lights()
+        yield grid.bridges[mac].search_lights()
         return {"state": "success"}
 
 
@@ -250,7 +250,7 @@ class BridgeAddUserHandler(AuthenticationHandler):
         username = data.get("username", None)
         
         try:
-            newname = grid.bridges[mac].create_user("playhouse user", username)
+            newname = yield grid.bridges[mac].create_user("playhouse user", username)
             return {"state": "success", "username": newname}
         except playhouse.NoLinkButtonPressedException:
             return errorcodes.NO_LINKBUTTON
