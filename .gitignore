@@ -2,4 +2,5 @@ __pycache__
 lightserver-all.log
 lightserver.log
 config.json
+bridge_setup.json
 private/*
