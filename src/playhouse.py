@@ -88,6 +88,8 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
 
 class Bridge:
     
+    ignoredkeys = set(["transitiontime", "alert", "effect", "colormode", "reachable"])
+    
     @classmethod
     @tornado.gen.coroutine
     def create_bridge(cls, ip, username=None, defaults={"transitiontime": 0}, timeout=2):
@@ -97,6 +99,8 @@ class Bridge:
         bridge.ipaddress = ip
         bridge.client = tornado.httpclient.AsyncHTTPClient()
         bridge.timeout = timeout
+        bridge.light_data = collections.defaultdict(dict)
+        bridge.groups = collections.defaultdict(list)
         
         try:
             if (yield bridge.send_request("GET", "/config"))['name'] != "Philips hue":
@@ -161,22 +165,47 @@ class Bridge:
         return (yield self.send_raw(method, "/api/{}{}".format(user, url), body))
     
     @tornado.gen.coroutine
-    def _set_state(self, url, args):
+    def _set_state(self, url, args):        
+        return (yield self.send_request("PUT", url, body=args))
+        
+    def _state_preprocess(self, args):
         defs = self.defaults.copy()
         defs.update(args)
         
         if 'rgb' in defs:
             defs['xy'] = rgb2xy(*defs['rgb'])
             del defs['rgb']
-        
-        return (yield self.send_request("PUT", url, body=defs))
+            
+        return defs
     
     @tornado.gen.coroutine
     def set_state(self, i, **args):
-        return (yield self._set_state('/lights/{}/state'.format(i), args))
+        args = self._state_preprocess(args)  
+        
+        # Remove unnecessary commands
+        state = self.light_data[i]
+        final_send = dict()
+        for k, v in args.items():
+            if k in self.ignoredkeys or k not in state or state[k]!=v:
+                final_send[k] = v
+                if k not in self.ignoredkeys:
+                    state[k] = v
+            elif k in state and state[k]==v:
+                pass # Do not include this redundant command
+        print(final_send)
+        return (yield self._set_state('/lights/{}/state'.format(i), final_send))
     
     @tornado.gen.coroutine
     def set_group(self, i, **args):
+        args = self._state_preprocess(args) 
+        keys = self.light_data.keys() if i == 0 else self.groups[i]
+        for k, v in args.items():
+            if k in self.ignoredkeys:
+                continue
+            else:
+                for lamp in keys:
+                    self.light_data[lamp][k] = v       
+        
         return (yield self._set_state('/groups/{}/action'.format(i), args))
     
     @tornado.gen.coroutine
@@ -211,8 +240,24 @@ class Bridge:
     
     @tornado.gen.coroutine
     def update_info(self):
-        info = yield self.send_request("GET", "/config")
-        
+        if self.username is not None:
+            data = yield self.send_request("GET", "/")
+            info = data["config"]
+            self.light_data.clear()
+            self.groups.clear()
+            for lamp_num, lamp in info["lights"].items():
+                state = lamp["state"]
+                for k, v in state.items():
+                    if k in self.ignoredkeys:
+                        continue
+                    self.light_data[int(lamp_num)][k] = v
+            for group_num, group in info["groups"].items():
+                lights = group["lights"]
+                self.groups[int(group_num)] = [int(x) for x in lights]
+            print(self.light_data)   
+        else:    
+            info = yield self.send_request("GET", "/config") 
+            
         if self.username is None or 'mac' not in info:
             self.logged_in = False
         else:
@@ -244,17 +289,7 @@ class LightGrid:
             if bridge.serial_number in usernames:
                 bridge.set_username(usernames[bridge.serial_number])"""
         self.set_grid(grid)
-        
-        #self.state = {}
-        #self._synchronize_state()
-        
-#    def _synchronize_state(self):
-#        for mac, bridge in self.bridges.items():
-#            data = self._send_request(bridge, "GET", "/")
-#            for k, v in data["lights"].items():
-#                self.state[(mac, int(k))] = v["state"]
-                    
-    
+            
     @tornado.gen.coroutine
     def add_bridge(self, ip_address_or_bridge, username=None):
         # can take an already instantiated bridge instance
@@ -295,9 +330,7 @@ class LightGrid:
         """
         
         self.buffer[(x, y)].update(args)
-#        for k, v in args.items():
-#                if self.state[cell].get(k) == v:
-#                    del self.buffer[cell][k]
+
         if not self.buffered:
             exceptions = yield self.commit()
             if len(exceptions) > 0:
