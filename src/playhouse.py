@@ -89,7 +89,7 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
 
 class Bridge:
     
-    ignoredkeys = set(["transitiontime", "alert", "effect", "colormode", "reachable"])
+    ignoredkeys = {"transitiontime", "alert", "effect", "colormode", "reachable"}
     
     @classmethod
     @tornado.gen.coroutine
