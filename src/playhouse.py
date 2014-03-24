@@ -240,21 +240,24 @@ class Bridge:
     
     @tornado.gen.coroutine
     def update_info(self):
+        print("Update " + str(self.username))
         if self.username is not None:
             data = yield self.send_request("GET", "/")
             info = data["config"]
             self.light_data.clear()
             self.groups.clear()
-            for lamp_num, lamp in info["lights"].items():
+            for lamp_num, lamp in data["lights"].items():
                 state = lamp["state"]
                 for k, v in state.items():
                     if k in self.ignoredkeys:
                         continue
+
                     self.light_data[int(lamp_num)][k] = v
-            for group_num, group in info["groups"].items():
+            for group_num, group in data["groups"].items():
                 lights = group["lights"]
                 self.groups[int(group_num)] = [int(x) for x in lights]
-            print(self.light_data)   
+            print(self.light_data)
+            print(self.groups)
         else:    
             info = yield self.send_request("GET", "/config") 
             
