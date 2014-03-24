@@ -192,7 +192,9 @@ class Bridge:
                     state[k] = v
             elif k in state and state[k]==v:
                 pass # Do not include this redundant command
-        print(final_send)
+        print("Started with:" + str(args))
+        print("Reduced to:" + str(final_send))
+
         return (yield self._set_state('/lights/{}/state'.format(i), final_send))
     
     @tornado.gen.coroutine
@@ -240,7 +242,7 @@ class Bridge:
     
     @tornado.gen.coroutine
     def update_info(self):
-        print("Update " + str(self.username))
+        #print("Update " + str(self.username))
         if self.username is not None:
             data = yield self.send_request("GET", "/")
             info = data["config"]
@@ -256,8 +258,8 @@ class Bridge:
             for group_num, group in data["groups"].items():
                 lights = group["lights"]
                 self.groups[int(group_num)] = [int(x) for x in lights]
-            print(self.light_data)
-            print(self.groups)
+            #print(self.light_data)
+            #print(self.groups)
         else:    
             info = yield self.send_request("GET", "/config") 
             
