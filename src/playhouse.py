@@ -20,6 +20,7 @@ try:
     import tornado.curl_httpclient
     tornado.httpclient.AsyncHTTPClient.configure(tornado.curl_httpclient.CurlAsyncHTTPClient)
 except ImportError:
+    logging.warning("Couldn't import CurlAsyncHTTPClient, reverting to slow default implementation")
     pass # use slower default implementation
 
 
