@@ -266,86 +266,63 @@ class BridgeAddUserHandler(AuthenticationHandler):
             return errorcodes.INVALID_NAME
 
 
-event = threading.Event()
-# later changes to the bridges if auto_add is True will be reflected
-# in new_bridges
-new_bridges = []
-last_search = -1
-
 class BridgesSearchHandler(AuthenticationHandler):
+    new_bridges = []
+    last_search = -1
+    is_running = False
+    
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json({"auto_add":bool})
     def post(self, data):
-        if event.is_set():
+        if BridgesSearchHandler.is_running:
             return errorcodes.CURRENTLY_SEARCHING
         
-        def myfunc():
-            global new_bridges, last_search
-            nonlocal data
-            event.set()
-            
-            logging.debug("Constructing IOLoop for discovery thread")
-            io_loop = tornado.ioloop.IOLoop()
-            
-            logging.info("Running bridge discovery")
-            future = playhouse.discover()
-            def stop_loop(*args, **kwargs):
-                io_loop.stop()
-            io_loop.add_future(future, stop_loop)
-            io_loop.start() # wait until finished
-            
-            new_bridges = future.result()
-            logging.debug("Bridges found: %s", new_bridges)
-            last_search = int(time.time())
-            
-            logging.info("Bridge discovery finished")
-            
-            if data['auto_add']:
-                @tornado.gen.coroutine
-                def auto_add(bridges):
-                    logging.info("Auto-adding bridges")
-                    for b in bridges:
-                        try:
-                            yield grid.add_bridge(b)
-                            logging.info("Added %s", b.serial_number)
-                        except playhouse.BridgeAlreadyAddedException:
-                            logging.info("%s already added", b.serial_number)
-                    logging.info("Finished auto-adding bridges")
-                    event.clear()
-                # add bridges in main thread
-                tornado.ioloop.IOLoop.instance().add_callback(auto_add, new_bridges)
-            else:
-                event.clear()
-        
-        
-        thread = threading.Thread()
-        thread.run = myfunc
-        thread.start()
+        logging.info("Doing bridge discovery")
+        BridgesSearchHandler.is_running = True
+        tornado.ioloop.IOLoop.current().add_future(
+            playhouse.discover(), functools.partial(self.get_result, data['auto_add']))
         
         return {"state": "success"}
+    
+    @tornado.gen.coroutine
+    def get_result(self, auto_add, future):
+        try: # add_future seems to discard the returned future along with its exception
+            BridgesSearchHandler.new_bridges = future.result()
+            logging.info("Bridge discovery found bridges at %s",
+                        [b.ipaddress for b in BridgesSearchHandler.new_bridges])
+            BridgesSearchHandler.last_search = int(time.time())
+            
+            if auto_add:
+                logging.info("Auto-adding bridges")
+                for b in BridgesSearchHandler.new_bridges:
+                    try:
+                        yield grid.add_bridge(b)
+                        logging.info("Added %s at %s", b.serial_number, b.ipaddress)
+                    except playhouse.BridgeAlreadyAddedException:
+                        logging.info("%s at %s already added", b.serial_number, b.ipaddress)
+                logging.info("Finished auto-adding bridges")
+            
+            BridgesSearchHandler.is_running = False
+            logging.info("Bridge discovery finished")
+        except Exception:
+            traceback.print_exc()
+        
     
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def get(self):
-        if event.is_set():
+        if BridgesSearchHandler.is_running:
             return errorcodes.CURRENTLY_SEARCHING
         
-        lights = yield {bridge.serial_number: bridge.get_lights()
-                        for bridge in new_bridges if bridge.logged_in}
         return {
             "state": "success",
-            "finished": last_search,
+            "finished": BridgesSearchHandler.last_search,
             "bridges": {
-                bridge.serial_number: {
-                    "ip": b.ipaddress,
-                    "username": b.username,
-                    "valid_username": b.logged_in,
-                    "lights": len(lights[bridge.serial_number]) if bridge.logged_in else -1
-                }
-                for bridge in new_bridges
+                bridge.serial_number: bridge.ipaddress
+                for bridge in BridgesSearchHandler.new_bridges
             }
         }
 
@@ -554,7 +531,7 @@ if __name__ == "__main__":
     
     logging.info("Creating empty LightGrid")
     grid = playhouse.LightGrid(buffered=True)
-    tornado.ioloop.IOLoop.instance().add_callback(init_lightgrid, grid)
+    init_lightgrid(grid) # will run when IO loop has started
     
     logging.info("Reading configuration file (%s)", CONFIG)
     

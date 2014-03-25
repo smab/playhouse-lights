@@ -1,6 +1,8 @@
 
 import collections
 import copy
+import datetime
+import errno
 import http.client
 import io
 import itertools
@@ -263,13 +265,21 @@ class LightGrid:
         else:
             bridge = yield Bridge.create_bridge(ip_address_or_bridge, username, self.defaults)
         
-        if bridge.serial_number in self.bridges:
+        if self.has_bridge(bridge):
             raise BridgeAlreadyAddedException()
         
         if bridge.username is None and bridge.serial_number in self.usernames:
             bridge.set_username(self.usernames[bridge.serial_number])
         self.bridges[bridge.serial_number] = bridge
         return bridge
+    
+    def has_bridge(self, mac_or_bridge):
+        if type(mac_or_bridge) is Bridge:
+            mac = mac_or_bridge.serial_number
+        else:
+            mac = mac_or_bridge
+        
+        return mac in self.bridges
     
     def set_usernames(self, usernames):
         self.usernames = usernames
@@ -340,12 +350,56 @@ class LightGrid:
         return exceptions
 
 
+class UDPWrapper:
+    def __init__(self):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setblocking(0)
+    
+    def setsockopt(self, *args, **kwargs):
+        self.socket.setsockopt(*args, **kwargs)
+    
+    def sendto(self, *args, **kwargs):
+        self.socket.sendto(*args, **kwargs)
+    
+    @tornado.gen.coroutine
+    def wait_for_responses(self, timeout=2):
+        self._responses = []
+        self.io_loop = tornado.ioloop.IOLoop.current()
+        self._timeout = timeout
+        self._callback = yield tornado.gen.Callback(self.socket.fileno())
+        
+        self.io_loop.add_handler(self.socket.fileno(), self._fetch_response, self.io_loop.READ)
+        self._set_timeout()
+        
+        yield tornado.gen.Wait(self.socket.fileno())
+            
+        return self._responses
+    
+    def _set_timeout(self):
+        self._timeout_handle = self.io_loop.add_timeout(
+            datetime.timedelta(seconds=self._timeout), self._on_timeout)
+    
+    def _fetch_response(self, fd, events):
+        while True:
+            try:
+                self._responses.append(self.socket.recvfrom(1024))
+                self.io_loop.remove_timeout(self._timeout_handle)
+                self._set_timeout()
+            except socket.error as e:
+                if e.args[0] not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    raise
+                return
+    
+    def _on_timeout(self):
+        self.io_loop.remove_handler(self.socket.fileno())
+        self._callback(self._responses)
+
+
 @tornado.gen.coroutine
 def discover(attempts=2, timeout=2):
-    socket.setdefaulttimeout(timeout)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+    s = UDPWrapper()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
     
     message = b'M-SEARCH * HTTP/1.1\r\n'\
               b'HOST: 239.255.255.250:1900\r\n'\
@@ -355,31 +409,35 @@ def discover(attempts=2, timeout=2):
     
     locations = set()
     
-    logging.info("Broadcasting %s times", attempts)
     for i in range(attempts):
-        logging.info("Broadcast #%s", i + 1)
-        sock.sendto(message, ("239.255.255.250", 1900))
-        while True:
-            try:
-                logging.debug("Waiting for response")
-                
-                raw, (address, port) = sock.recvfrom(1024)
-                response = io.BytesIO(raw)
-                
-                logging.debug("Got response: %s", response)
-                
-                response.makefile = lambda *args, **kwargs: response
-                header = http.client.HTTPResponse(response)
-                header.begin()
-                
-                logging.debug("Response status was %s and location header was %s",
-                              header.status, header.getheader('location'))
-                if header.status == 200 and header.getheader('location') is not None:
-                    logging.debug("Adding %s to list", address)
-                    locations.add(address)
-            except socket.timeout:
-                logging.info("No response from broadcast #%s in %s second(s)", i + 1, timeout)
-                break
+        logging.debug("Broadcasting %s", message)
+        for _ in range(2):
+            s.sendto(message, ("239.255.255.250", 1900))
+        
+        logging.debug("Waiting for responses")
+        for raw, (address, port) in (yield s.wait_for_responses()):
+            logging.debug("%s:%s says: %s", address, port, raw)
+            
+            # NOTE: we'll skip doing any checks in particular here,
+            # and instead just rely on Bridge.create_bridge to
+            # correctly identify whether the address belongs to
+            # a Hue bridge or not
+            
+            #response = io.BytesIO(raw)
+            
+            #logging.debug("Got response: %s", response)
+            
+            #response.makefile = lambda *args, **kwargs: response
+            #header = http.client.HTTPResponse(response)
+            #header.begin()
+            
+            #logging.debug("Response status was %s and location header was %s",
+                            #header.status, header.getheader('location'))
+            #if header.status == 200 and header.getheader('location') is not None:
+                #logging.debug("Adding %s to list", address)
+                #locations.add(address)
+            
+            locations.add(address)
     
     logging.debug("List of addresses is %s", locations)
     bridges = []
