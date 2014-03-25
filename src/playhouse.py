@@ -193,8 +193,8 @@ class Bridge:
                     state[k] = v
             elif k in state and state[k]==v:
                 pass # Do not include this redundant command
-        print("Started with:" + str(args))
-        print("Reduced to:" + str(final_send))
+        #print("Started with:" + str(args))
+        #print("Reduced to:" + str(final_send))
 
         return (yield self._set_state('/lights/{}/state'.format(i), final_send))
     
@@ -240,6 +240,33 @@ class Bridge:
         res = (yield self.send_raw("POST", "/api", body))[0]
         yield self.set_username(res['success']['username'])
         return self.username
+        
+    @tornado.gen.coroutine
+    def create_group(self, lights, name=None):
+        body = {'lights':[str(x) for x in lights]}
+        if name is not None:
+            body['name'] = name
+        res = yield self.send_request("POST", "/groups", body)
+        try:
+            str = res[0]["success"]["id"]
+            match = re.match("/groups/(\d+)", str)
+            group = int(match.group(1))
+            self.groups[group] = lights.copy()
+
+        except:
+            pass
+        return res
+            
+    @tornado.gen.coroutine
+    def delete_group(self, i):
+             
+        res = (yield self.send_request("DELETE", "/groups/{}".format(i)))[0]
+        try:
+            str = res["success"]
+            del self.groups[i]
+        except:
+            pass
+        return res
     
     @tornado.gen.coroutine
     def update_info(self):
