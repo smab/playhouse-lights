@@ -247,25 +247,19 @@ class Bridge:
         if name is not None:
             body['name'] = name
         res = yield self.send_request("POST", "/groups", body)
-        try:
-            str = res[0]["success"]["id"]
-            match = re.match("/groups/(\d+)", str)
-            group = int(match.group(1))
-            self.groups[group] = lights.copy()
+        str = res[0]["success"]["id"]
+        match = re.match("/groups/(\d+)", str)
+        group = int(match.group(1))
+        self.groups[group] = lights.copy()
 
-        except:
-            pass
+
         return res
             
     @tornado.gen.coroutine
     def delete_group(self, i):
              
-        res = (yield self.send_request("DELETE", "/groups/{}".format(i)))[0]
-        try:
-            str = res["success"]
-            del self.groups[i]
-        except:
-            pass
+        res = (yield self.send_request("DELETE", "/groups/{}".format(i)))[0]        
+        del self.groups[i]
         return res
     
     @tornado.gen.coroutine
