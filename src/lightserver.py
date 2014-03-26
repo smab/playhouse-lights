@@ -518,13 +518,15 @@ def init_lightgrid(grid):
     grid.set_grid(bridge_config["grid"])
 
     logging.info("Adding preconfigured bridges")
-    for ip in bridge_config["ips"]:
-        try:
-            bridge = yield grid.add_bridge(ip)
-            logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
-        except:
-            logging.warning("Couldn't find a bridge at %s", ip)
-            logging.debug("", exc_info=True)
+
+    res, exc = yield playhouse.ExceptionCatcher({ip: grid.add_bridge(ip)
+                                                 for ip in bridge_config['ips']})
+    for ip, bridge in res.items():
+        logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
+    for ip, e in exc.items():
+        logging.info("Couldn't find a bridge at %s", ip)
+        logging.debug("", exc_info=(type(e), e, e.__traceback__))
+
     logging.info("Finished adding bridges")
 
 
