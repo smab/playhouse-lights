@@ -64,15 +64,21 @@ def parse_json(jformat):
                 required_keys = set(x for x in jf if x[0] != '?')
                 jf = {k[1:] if k[0] == '?' else k: v for k, v in jf.items()}
             # don't even ask
-            return (type(jf) is list and type(data) is list and
-                        all(is_valid(d, jf[0]) for d in data)) or \
-                   (type(jf) is tuple and type(data) is list and len(data) == len(jf) and
-                        all(is_valid(a, b) for a, b in zip(data, jf))) or \
-                   (type(jf) is dict and type(data) is dict and
-                        data.keys() <= all_keys and data.keys() >= required_keys and
-                        all(is_valid(data[k], jf[k]) for k in data)) or \
-                   (type(jf) is set and type(data) in jf) or \
-                   (type(jf) is type and type(data) is jf)
+            valid_format = (type(jf) is list and len(jf) == 1 and type(data) is list and
+                                all(is_valid(d, jf[0]) for d in data)) or \
+                           (type(jf) is list and len(jf) > 1 and type(data) is list and
+                                len(data) == len(jf) and
+                                all(is_valid(a, b) for a, b in zip(data, jf))) or \
+                           (type(jf) is dict and type(data) is dict and
+                                data.keys() <= all_keys and data.keys() >= required_keys and
+                                all(is_valid(data[k], jf[k]) for k in data)) or \
+                           (type(jf) is tuple and any(is_valid(data, a) for a in jf)) or \
+                           (type(jf) is type and type(data) is jf)
+            if valid_format:
+                logging.debug("%s vs %s was valid", repr(data), jf)
+            else:
+                logging.debug("%s vs %s was invalid", repr(data), jf)
+            return valid_format
 
 
         @functools.wraps(func)
@@ -102,19 +108,22 @@ class LightsHandler(AuthenticationHandler):
     @authenticated
     @parse_json([{"x": int, "y": int, "?delay": float, "change": dict}])
     def post(self, data):
+        def handle_exceptions(exceptions):
+            for (x, y), e in exceptions.items():
+                if type(e) is playhouse.NoBridgeAtCoordinateException:
+                    logging.warning("No bridge added for (%s,%s)", x, y)
+                    logging.debug("", exc_info=(type(e), e, e.__traceback__))
+                elif type(e) is playhouse.OutsideGridException:
+                    logging.warning("(%s,%s) is outside grid bounds", x, y)
+                    logging.debug("", exc_info=(type(e), e, e.__traceback__))
+                else:
+                    raise e
+
         @tornado.gen.coroutine
         def set_state(light, do_commit=False):
-            try:
-                grid.set_state(light['x'], light['y'], **light['change'])
-            except playhouse.NoBridgeAtCoordinateException:
-                logging.warning("No bridge added for (%s,%s)", light['x'], light['y'])
-                logging.debug("", exc_info=True)
-            except playhouse.OutsideGridException:
-                logging.warning("(%s,%s) is outside grid bounds", light['x'], light['y'])
-                logging.debug("", exc_info=True)
-
+            grid.set_state(light['x'], light['y'], **light['change'])
             if do_commit:
-                yield grid.commit()
+                handle_exceptions((yield grid.commit()))
 
         for light in data:
             if "delay" in light:
@@ -124,7 +133,8 @@ class LightsHandler(AuthenticationHandler):
             else:
                 set_state(light)
 
-        yield grid.commit()
+        handle_exceptions((yield grid.commit()))
+
         return {"state": "success"}
 
 
@@ -164,7 +174,7 @@ class BridgesAddHandler(AuthenticationHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
-    @parse_json({"ip": str, "?username": {str, type(None)}})
+    @parse_json({"ip": str, "?username": (str, type(None))})
     def post(self, data):
         try:
             username = data.get("username", None)
@@ -190,7 +200,7 @@ class BridgesMacHandler(AuthenticationHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
-    @parse_json({"username": {str, type(None)}})
+    @parse_json({"username": (str, type(None))})
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
@@ -277,7 +287,7 @@ class BridgesSearchHandler(AuthenticationHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
-    @parse_json({"auto_add":bool})
+    @parse_json({"auto_add": bool})
     def post(self, data):
         if BridgesSearchHandler.is_running:
             return errorcodes.CURRENTLY_SEARCHING
@@ -334,9 +344,11 @@ class GridHandler(AuthenticationHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
-    @parse_json([[{"mac": str, "lamp": int}]])
+    @parse_json([[({"mac": str, "lamp": int}, type(None))]])
     def post(self, data):
-        g = [[(lamp['mac'], lamp['lamp']) for lamp in row] for row in data]
+        g = [[(lamp['mac'], lamp['lamp']) if lamp is not None else None
+              for lamp in row]
+             for row in data]
         grid.set_grid(g)
         logging.debug("Grid is set to %s", g)
         return {"state": "success"}
@@ -345,8 +357,10 @@ class GridHandler(AuthenticationHandler):
     @return_as_json
     @authenticated
     def get(self):
-        data = [[{"mac": mac, "lamp": lamp} for mac, lamp in row] for row in grid.grid]
-        return {"state":"success", "grid":data, "width":grid.width, "height":grid.height}
+        data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
+                 for col in row]
+                for row in grid.grid]
+        return {"state": "success", "grid": data, "width": grid.width, "height": grid.height}
 
 class BridgesSaveHandler(AuthenticationHandler):
     @tornado.gen.coroutine

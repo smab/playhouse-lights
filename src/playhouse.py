@@ -414,7 +414,7 @@ class LightGrid:
         exceptions = {}
         for (x, y), changes in self._buffer.items():
             try:
-                if x >= self.width or y >= self.height:
+                if x >= self.width or y >= self.height or self.grid[y][x] is None:
                     raise OutsideGridException
 
                 mac, light = self.grid[y][x]
