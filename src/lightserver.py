@@ -5,8 +5,6 @@ import inspect
 import json
 import logging
 import os
-import ssl
-import threading
 import time
 import traceback
 
@@ -51,7 +49,7 @@ def return_as_json(func):
         data = func(self, *args, **kwargs)
         if inspect.isgenerator(data):
             data = yield from data
-        
+
         logging.debug("Sent response %s", data)
         self.write(tornado.escape.json_encode(data))
     return new_func
@@ -66,26 +64,30 @@ def parse_json(jformat):
                 required_keys = set(x for x in jf if x[0] != '?')
                 jf = {k[1:] if k[0] == '?' else k: v for k, v in jf.items()}
             # don't even ask
-            return (type(jf) is list and type(data) is list and all(is_valid(d, jf[0]) for d in data)) or \
-                   (type(jf) is tuple and type(data) is list and len(data) == len(jf) and all(is_valid(a, b) for a, b in zip(data, jf))) or \
-                   (type(jf) is dict and type(data) is dict and data.keys() <= all_keys and data.keys() >= required_keys and all(is_valid(data[k], jf[k]) for k in data)) or \
+            return (type(jf) is list and type(data) is list and
+                        all(is_valid(d, jf[0]) for d in data)) or \
+                   (type(jf) is tuple and type(data) is list and len(data) == len(jf) and
+                        all(is_valid(a, b) for a, b in zip(data, jf))) or \
+                   (type(jf) is dict and type(data) is dict and
+                        data.keys() <= all_keys and data.keys() >= required_keys and
+                        all(is_valid(data[k], jf[k]) for k in data)) or \
                    (type(jf) is set and type(data) in jf) or \
                    (type(jf) is type and type(data) is jf)
-        
-        
+
+
         @functools.wraps(func)
         def new_func(self, *args, **kwargs):
             try:
                 data = tornado.escape.json_decode(self.request.body)
                 logging.debug("Got request %s", data)
-                
-                if (is_valid(data, jformat)):
+
+                if is_valid(data, jformat):
                     #return (yield from func(self, data, *args, **kwargs))
                     return func(self, data, *args, **kwargs)
                 else:
                     logging.debug("Request was invalid")
                     return errorcodes.INVALID_FORMAT
-                
+
             except UnicodeDecodeError:
                 return errorcodes.NOT_UNICODE
             except ValueError:
@@ -110,10 +112,10 @@ class LightsHandler(AuthenticationHandler):
             except playhouse.OutsideGridException:
                 logging.warning("(%s,%s) is outside grid bounds", light['x'], light['y'])
                 logging.debug("", exc_info=True)
-            
+
             if do_commit:
                 yield grid.commit()
-        
+
         for light in data:
             if "delay" in light:
                 tornado.ioloop.IOLoop.instance().add_timeout(
@@ -121,7 +123,7 @@ class LightsHandler(AuthenticationHandler):
                     functools.partial(set_state, light, do_commit=True))
             else:
                 set_state(light)
-        
+
         yield grid.commit()
         return {"state": "success"}
 
@@ -193,7 +195,8 @@ class BridgesMacHandler(AuthenticationHandler):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         yield grid.bridges[mac].set_username(data['username'])
-        return {"state": "success", "username": data['username'], "valid_username": grid.bridges[mac].logged_in}
+        return {"state": "success", "username": data['username'],
+                "valid_username": grid.bridges[mac].logged_in}
 
     @tornado.gen.coroutine
     @return_as_json
@@ -201,7 +204,7 @@ class BridgesMacHandler(AuthenticationHandler):
     def delete(self, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        
+
         del grid.bridges[mac]
         return {"state": "success"}
 
@@ -214,10 +217,10 @@ class BridgeLightsHandler(AuthenticationHandler):
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        
+
         for light in data:
             yield grid.bridges[mac].set_state(light['light'], **light['change'])
-        
+
         return {'state': 'success'}
 
 
@@ -229,9 +232,9 @@ class BridgeLightsAllHandler(AuthenticationHandler):
     def post(self, data, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        
+
         yield grid.bridges[mac].set_group(0, **data)
-        
+
         return {'state': 'success'}
 
 
@@ -239,7 +242,7 @@ class BridgeLampSearchHandler(AuthenticationHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
-    def post(self, mac):        
+    def post(self, mac):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         yield grid.bridges[mac].search_lights()
@@ -255,7 +258,7 @@ class BridgeAddUserHandler(AuthenticationHandler):
         if mac not in grid.bridges:
             return errorcodes.NO_SUCH_MAC.format(mac=mac)
         username = data.get("username", None)
-        
+
         try:
             newname = yield grid.bridges[mac].create_user("playhouse user", username)
             return {"state": "success", "username": newname}
@@ -270,7 +273,7 @@ class BridgesSearchHandler(AuthenticationHandler):
     new_bridges = []
     last_search = -1
     is_running = False
-    
+
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
@@ -278,14 +281,14 @@ class BridgesSearchHandler(AuthenticationHandler):
     def post(self, data):
         if BridgesSearchHandler.is_running:
             return errorcodes.CURRENTLY_SEARCHING
-        
+
         logging.info("Doing bridge discovery")
         BridgesSearchHandler.is_running = True
         tornado.ioloop.IOLoop.current().add_future(
             playhouse.discover(), functools.partial(self.get_result, data['auto_add']))
-        
+
         return {"state": "success"}
-    
+
     @tornado.gen.coroutine
     def get_result(self, auto_add, future):
         try: # add_future seems to discard the returned future along with its exception
@@ -293,7 +296,7 @@ class BridgesSearchHandler(AuthenticationHandler):
             logging.info("Bridge discovery found bridges at %s",
                         [b.ipaddress for b in BridgesSearchHandler.new_bridges])
             BridgesSearchHandler.last_search = int(time.time())
-            
+
             if auto_add:
                 logging.info("Auto-adding bridges")
                 for b in BridgesSearchHandler.new_bridges:
@@ -303,20 +306,20 @@ class BridgesSearchHandler(AuthenticationHandler):
                     except playhouse.BridgeAlreadyAddedException:
                         logging.info("%s at %s already added", b.serial_number, b.ipaddress)
                 logging.info("Finished auto-adding bridges")
-            
+
             BridgesSearchHandler.is_running = False
             logging.info("Bridge discovery finished")
         except Exception:
             traceback.print_exc()
-        
-    
+
+
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def get(self):
         if BridgesSearchHandler.is_running:
             return errorcodes.CURRENTLY_SEARCHING
-        
+
         return {
             "state": "success",
             "finished": BridgesSearchHandler.last_search,
@@ -337,7 +340,7 @@ class GridHandler(AuthenticationHandler):
         grid.set_grid(g)
         logging.debug("Grid is set to %s", g)
         return {"state": "success"}
-    
+
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
@@ -354,15 +357,17 @@ class BridgesSaveHandler(AuthenticationHandler):
             with open(BRIDGE_CONFIG, 'r') as f:
                 conf = tornado.escape.json_decode(f.read())
         except (FileNotFoundError, ValueError):
-            logging.warning("%s not found or contained invalid JSON, creating new file", BRIDGE_CONFIG)
+            logging.warning("%s not found or contained invalid JSON, creating new file",
+                            BRIDGE_CONFIG)
             conf = {}
-        
+
         conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
-        conf['usernames'] = {bridge.serial_number: bridge.username for bridge in grid.bridges.values()}
-        
+        conf['usernames'] = {bridge.serial_number: bridge.username
+                             for bridge in grid.bridges.values()}
+
         with open(BRIDGE_CONFIG, 'w') as f:
             f.write(tornado.escape.json_encode(conf))
-        
+
         return {"state": "success"}
 
 class GridSaveHandler(AuthenticationHandler):
@@ -374,17 +379,18 @@ class GridSaveHandler(AuthenticationHandler):
             with open(BRIDGE_CONFIG, 'r') as f:
                 conf = tornado.escape.json_decode(f.read())
         except (FileNotFoundError, ValueError):
-            logging.warning("%s not found or contained invalid JSON, creating new file", BRIDGE_CONFIG)
+            logging.warning("%s not found or contained invalid JSON, creating new file",
+                            BRIDGE_CONFIG)
             conf = {}
-        
+
         conf['grid'] = grid.grid
-        
+
         with open(BRIDGE_CONFIG, 'w') as f:
             conf['grid'] = grid.grid
             f.write(tornado.escape.json_encode(conf))
-        
+
         return {"state": "success"}
-        
+
 class DebugHandler(tornado.web.RequestHandler):
     def get(self):
         website = """
@@ -423,7 +429,7 @@ function send_post(){
 <textarea rows="10" cols="50" id="request"></textarea>
 <h2>Response</h2>
 <textarea readonly="readonly" rows="10" cols="50" id="response"></textarea>
- 
+
 </body>
 </html>
 
@@ -431,7 +437,7 @@ function send_post(){
 
 </html>
 
-        
+
         """
         self.write(website)
 
@@ -488,15 +494,15 @@ def init_lightgrid(grid):
         with open(BRIDGE_CONFIG, 'r') as file:
             bridge_config.update(tornado.escape.json_decode(file.read()))
             logging.debug("Configuration was %s", bridge_config)
-            
+
             bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
             logging.debug("Constructed grid %s", bridge_config["grid"])
     except (FileNotFoundError, ValueError):
         logging.warning("%s not found or contained invalid JSON, using empty grid", BRIDGE_CONFIG)
-    
+
     grid.set_usernames(bridge_config["usernames"])
     grid.set_grid(bridge_config["grid"])
-    
+
     logging.info("Adding preconfigured bridges")
     for ip in bridge_config["ips"]:
         try:
@@ -511,40 +517,40 @@ def init_lightgrid(grid):
 if __name__ == "__main__":
     format_string = "%(created)d:%(levelname)s:%(module)s:%(funcName)s:%(lineno)d > %(message)s"
     formatter = logging.Formatter(format_string)
-    
+
     logging.basicConfig(filename="lightserver-all.log",
                         level=logging.DEBUG,
                         format=format_string)
-    
+
     file_handler = logging.FileHandler(filename="lightserver.log")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
-    
+
     stderr_handler = logging.StreamHandler()
     stderr_handler.setLevel(logging.INFO)
     stderr_handler.setFormatter(formatter)
-    
+
     logging.getLogger().addHandler(file_handler)
     logging.getLogger().addHandler(stderr_handler)
-    
+
     logging.info("Initializing light server")
-    
+
     logging.info("Creating empty LightGrid")
     grid = playhouse.LightGrid(buffered=True)
     init_lightgrid(grid) # will run when IO loop has started
-    
+
     logging.info("Reading configuration file (%s)", CONFIG)
-    
+
     try:
         config.update(json.load(open(CONFIG)))
     except FileNotFoundError:
         logging.warning("%s not found, using default configuration values", CONFIG)
-    
+
     if config['require_password']:
         logging.info("This instance will require authentication")
     else:
         logging.warning("This instance will NOT require authentication")
-    
+
     if config['ssl']:
         logging.info("Setting up HTTPS server")
         http_server = tornado.httpserver.HTTPServer(application, ssl_options={
@@ -554,8 +560,8 @@ if __name__ == "__main__":
     else:
         logging.info("Setting up HTTP server")
         http_server = tornado.httpserver.HTTPServer(application)
-    
+
     http_server.listen(config['port'])
-    
+
     logging.info("Server now listening at port %s", config['port'])
     tornado.ioloop.IOLoop.instance().start()
