@@ -38,6 +38,9 @@ class HueAPIException(Exception):
         self.description = error["error"]["description"]
         self.type = error["error"]["type"]
 
+class UnauthorizedUserException(HueAPIException):
+    pass
+
 class NoLinkButtonPressedException(HueAPIException):
     pass
 
@@ -112,7 +115,7 @@ class Bridge:
         self.logged_in = False
 
         try:
-            if (yield self.send_request("GET", "/config"))['name'] != "Philips hue":
+            if (yield self.send_request("GET", "/config", force_send=True))['name'] != "Philips hue":
                 raise Exception()
 
             res = yield self.http_request("GET", "/description.xml")
@@ -160,6 +163,7 @@ class Bridge:
         res = tornado.escape.json_decode(res.body)
 
         exceptions = {
+            1: UnauthorizedUserException,
             101: NoLinkButtonPressedException
         }
         if type(res) is list:
@@ -170,12 +174,15 @@ class Bridge:
         return res
 
     @tornado.gen.coroutine
-    def send_request(self, method, url, body=None):
-        user = self.username
-        if user is None:
-            user = "none"
+    def send_request(self, method, url, body=None, force_send=False):
+        username = self.username
+        if username is None and not force_send:
+            raise UnauthorizedUserException({"error": {"type": 1, "address": url,
+                                                       "description": "unauthorized user"}})
+        elif username is None:
+            username = "none" # dummy username guaranteed to be invalid (too short)
 
-        return (yield self.send_raw(method, "/api/{}{}".format(user, url), body))
+        return (yield self.send_raw(method, "/api/{}{}".format(username, url), body))
 
     @tornado.gen.coroutine
     def _set_state(self, url, args):
@@ -276,9 +283,16 @@ class Bridge:
     @tornado.gen.coroutine
     def update_info(self):
         #print("Update " + str(self.username))
-        if self.username is not None:
+        try:
             data = yield self.send_request("GET", "/")
             info = data["config"]
+
+            self.logged_in = True
+            self.gateway = info['gateway']
+            self.netmask = info['netmask']
+            self.name = info['name']
+            self.mac = info['mac']
+
             self.light_data.clear()
             self.groups.clear()
             for lamp_num, lamp in data["lights"].items():
@@ -293,18 +307,14 @@ class Bridge:
                 self.groups[int(group_num)] = [int(x) for x in lights]
             #print(self.light_data)
             #print(self.groups)
-        else:
-            info = yield self.send_request("GET", "/config")
-
-        if self.username is None or 'mac' not in info:
+        except UnauthorizedUserException:
+            if self.username is not None:
+                logging.warning("Couldn't send request to %s using username %s", self.serial_number, self.username)
             self.logged_in = False
-        else:
-            self.logged_in = True
-
-        self.gateway = info.get('gateway', None)
-        self.netmask = info.get('netmask', None)
-        self.name = info.get('name', None)
-        self.mac = info.get('mac', None)
+            self.gateway = None
+            self.netmask = None
+            self.name = None
+            self.mac = None
 
 
 class LightGrid:
