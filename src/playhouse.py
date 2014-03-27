@@ -81,8 +81,7 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
         for k, v in self.children.items():
             try:
                 results[k] = v.get_result()
-            # pylint: disable=broad-except
-            except Exception as e:
+            except Exception as e: # pylint: disable=broad-except
                 exceptions[k] = e
         return results, exceptions
 

@@ -17,26 +17,34 @@ import tornado.web
 import errorcodes
 import playhouse
 
+# disabling too-many-public methods globally in the module
+# because of Tornado's RequestHandler
+# disabling arguments-differ as this is a consequence of
+# the use of the parse_json decorator
+# pylint: disable=too-many-public-methods,arguments-differ
 
-CONFIG = "config.json"
-BRIDGE_CONFIG = "bridge_setup.json"
+CONFIG_FILE = "config.json"
+BRIDGE_CONFIG_FILE = "bridge_setup.json"
 
-config = {
+CONFIG = {
     "port": 4711,
     "require_password": False,
     "password": None,
     "ssl": False
 }
 
-class AuthenticationHandler(tornado.web.RequestHandler):
+GRID = playhouse.LightGrid(buffered=True)
+
+
+class BaseHandler(tornado.web.RequestHandler):
     def get_current_user(self):
         return self.get_secure_cookie("user")
 
 def authenticated(func):
     @functools.wraps(func)
     def new_func(self, *args, **kwargs):
-        if config['require_password'] and not self.current_user:
-            return errorcodes.NOT_LOGGED_IN
+        if CONFIG['require_password'] and not self.current_user:
+            return errorcodes.E_NOT_LOGGED_IN
         else:
             #return (yield from func(self, *args, **kwargs))
             return func(self, *args, **kwargs)
@@ -56,28 +64,28 @@ def return_as_json(func):
 
 def parse_json(jformat):
     def decorator(func):
-        def is_valid(data, jf):
-            logging.debug("Testing %s vs %s", repr(data), jf)
-            if type(jf) is dict:
+        def is_valid(data, schema):
+            logging.debug("Testing %s vs %s", repr(data), schema)
+            if type(schema) is dict:
                 # handle optional keys (?-prefixed)
-                all_keys = set(x[1:] if x[0] == '?' else x for x in jf)
-                required_keys = set(x for x in jf if x[0] != '?')
-                jf = {k[1:] if k[0] == '?' else k: v for k, v in jf.items()}
+                all_keys = set(x[1:] if x[0] == '?' else x for x in schema)
+                required_keys = set(x for x in schema if x[0] != '?')
+                schema = {k[1:] if k[0] == '?' else k: v for k, v in schema.items()}
             # don't even ask
-            valid_format = (type(jf) is list and len(jf) == 1 and type(data) is list and
-                                all(is_valid(d, jf[0]) for d in data)) or \
-                           (type(jf) is list and len(jf) > 1 and type(data) is list and
-                                len(data) == len(jf) and
-                                all(is_valid(a, b) for a, b in zip(data, jf))) or \
-                           (type(jf) is dict and type(data) is dict and
+            valid_format = (type(schema) is list and len(schema) == 1 and type(data) is list and
+                                all(is_valid(d, schema[0]) for d in data)) or \
+                           (type(schema) is list and len(schema) > 1 and type(data) is list and
+                                len(data) == len(schema) and
+                                all(is_valid(a, b) for a, b in zip(data, schema))) or \
+                           (type(schema) is dict and type(data) is dict and
                                 data.keys() <= all_keys and data.keys() >= required_keys and
-                                all(is_valid(data[k], jf[k]) for k in data)) or \
-                           (type(jf) is tuple and any(is_valid(data, a) for a in jf)) or \
-                           (type(jf) is type and type(data) is jf)
+                                all(is_valid(data[k], schema[k]) for k in data)) or \
+                           (type(schema) is tuple and any(is_valid(data, a) for a in schema)) or \
+                           (type(schema) is type and type(data) is schema)
             if valid_format:
-                logging.debug("%s vs %s was valid", repr(data), jf)
+                logging.debug("%s vs %s was valid", repr(data), schema)
             else:
-                logging.debug("%s vs %s was invalid", repr(data), jf)
+                logging.debug("%s vs %s was invalid", repr(data), schema)
             return valid_format
 
 
@@ -92,17 +100,17 @@ def parse_json(jformat):
                     return func(self, data, *args, **kwargs)
                 else:
                     logging.debug("Request was invalid")
-                    return errorcodes.INVALID_FORMAT
+                    return errorcodes.E_INVALID_FORMAT
 
             except UnicodeDecodeError:
-                return errorcodes.NOT_UNICODE
+                return errorcodes.E_NOT_UNICODE
             except ValueError:
-                return errorcodes.INVALID_JSON
+                return errorcodes.E_INVALID_JSON
         return new_func
     return decorator
 
 
-class LightsHandler(AuthenticationHandler):
+class LightsHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
@@ -121,9 +129,9 @@ class LightsHandler(AuthenticationHandler):
 
         @tornado.gen.coroutine
         def set_state(light, do_commit=False):
-            grid.set_state(light['x'], light['y'], **light['change'])
+            GRID.set_state(light['x'], light['y'], **light['change'])
             if do_commit:
-                handle_exceptions((yield grid.commit()))
+                handle_exceptions((yield GRID.commit()))
 
         for light in data:
             if "delay" in light:
@@ -133,28 +141,28 @@ class LightsHandler(AuthenticationHandler):
             else:
                 set_state(light)
 
-        handle_exceptions((yield grid.commit()))
+        handle_exceptions((yield GRID.commit()))
 
         return {"state": "success"}
 
 
-class LightsAllHandler(AuthenticationHandler):
+class LightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json(dict)
     def post(self, data):
-        yield grid.set_all(**data)
-        yield grid.commit()
+        yield GRID.set_all(**data)
+        yield GRID.commit()
         return {"state": "success"}
 
-class BridgesHandler(AuthenticationHandler):
+class BridgesHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def get(self):
         lights = yield {mac: bridge.get_lights()
-                        for mac, bridge in grid.bridges.items()
+                        for mac, bridge in GRID.bridges.items()
                         if bridge.logged_in}
         res = {
             "state": "success",
@@ -165,12 +173,12 @@ class BridgesHandler(AuthenticationHandler):
                     "valid_username": bridge.logged_in,
                     "lights": len(lights[mac]) if bridge.logged_in else -1
                 }
-                for mac, bridge in grid.bridges.items()
+                for mac, bridge in GRID.bridges.items()
             }
         }
         return res
 
-class BridgesAddHandler(AuthenticationHandler):
+class BridgesAddHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
@@ -178,11 +186,11 @@ class BridgesAddHandler(AuthenticationHandler):
     def post(self, data):
         try:
             username = data.get("username", None)
-            bridge = yield grid.add_bridge(data['ip'], username)
+            bridge = yield GRID.add_bridge(data['ip'], username)
         except playhouse.BridgeAlreadyAddedException:
-            return errorcodes.BRIDGE_ALREADY_ADDED
+            return errorcodes.E_BRIDGE_ALREADY_ADDED
         except:
-            return errorcodes.BRIDGE_NOT_FOUND.format(ip=data['ip'])
+            return errorcodes.E_BRIDGE_NOT_FOUND.format(ip=data['ip'])
         return {
             "state": "success",
             "bridges": {
@@ -196,90 +204,90 @@ class BridgesAddHandler(AuthenticationHandler):
         }
 
 
-class BridgesMacHandler(AuthenticationHandler):
+class BridgesMacHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json({"username": (str, type(None))})
     def post(self, data, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        yield grid.bridges[mac].set_username(data['username'])
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
+        yield GRID.bridges[mac].set_username(data['username'])
         return {"state": "success", "username": data['username'],
-                "valid_username": grid.bridges[mac].logged_in}
+                "valid_username": GRID.bridges[mac].logged_in}
 
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def delete(self, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
 
-        del grid.bridges[mac]
+        del GRID.bridges[mac]
         return {"state": "success"}
 
 
-class BridgeLightsHandler(AuthenticationHandler):
+class BridgeLightsHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json([{"light": int, "change": dict}])
     def post(self, data, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
 
         for light in data:
-            yield grid.bridges[mac].set_state(light['light'], **light['change'])
+            yield GRID.bridges[mac].set_state(light['light'], **light['change'])
 
         return {'state': 'success'}
 
 
-class BridgeLightsAllHandler(AuthenticationHandler):
+class BridgeLightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json(dict)
     def post(self, data, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
 
-        yield grid.bridges[mac].set_group(0, **data)
+        yield GRID.bridges[mac].set_group(0, **data)
 
         return {'state': 'success'}
 
 
-class BridgeLampSearchHandler(AuthenticationHandler):
+class BridgeLampSearchHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def post(self, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
-        yield grid.bridges[mac].search_lights()
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
+        yield GRID.bridges[mac].search_lights()
         return {"state": "success"}
 
 
-class BridgeAddUserHandler(AuthenticationHandler):
+class BridgeAddUserHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     @parse_json({"?username": str})
     def post(self, data, mac):
-        if mac not in grid.bridges:
-            return errorcodes.NO_SUCH_MAC.format(mac=mac)
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
         username = data.get("username", None)
 
         try:
-            newname = yield grid.bridges[mac].create_user("playhouse user", username)
+            newname = yield GRID.bridges[mac].create_user("playhouse user", username)
             return {"state": "success", "username": newname}
         except playhouse.NoLinkButtonPressedException:
-            return errorcodes.NO_LINKBUTTON
+            return errorcodes.E_NO_LINKBUTTON
         except Exception:
             logging.debug("", exc_info=True)
-            return errorcodes.INVALID_NAME
+            return errorcodes.E_INVALID_NAME
 
 
-class BridgesSearchHandler(AuthenticationHandler):
+class BridgesSearchHandler(BaseHandler):
     new_bridges = []
     last_search = -1
     is_running = False
@@ -290,37 +298,38 @@ class BridgesSearchHandler(AuthenticationHandler):
     @parse_json({"auto_add": bool})
     def post(self, data):
         if BridgesSearchHandler.is_running:
-            return errorcodes.CURRENTLY_SEARCHING
+            return errorcodes.E_CURRENTLY_SEARCHING
+
+        @tornado.gen.coroutine
+        def get_result(future):
+            try: # add_future seems to discard the returned future along with its exception
+                BridgesSearchHandler.new_bridges = future.result()
+                logging.info("Bridge discovery found bridges at %s",
+                            [b.ipaddress for b in BridgesSearchHandler.new_bridges])
+                BridgesSearchHandler.last_search = int(time.time())
+
+                if data['auto_add']:
+                    logging.info("Auto-adding bridges")
+                    for b in BridgesSearchHandler.new_bridges:
+                        try:
+                            yield GRID.add_bridge(b)
+                            logging.info("Added %s at %s", b.serial_number, b.ipaddress)
+                        except playhouse.BridgeAlreadyAddedException:
+                            logging.info("%s at %s already added", b.serial_number, b.ipaddress)
+                    logging.info("Finished auto-adding bridges")
+
+                BridgesSearchHandler.is_running = False
+                logging.info("Bridge discovery finished")
+            except Exception:
+                traceback.print_exc()
 
         logging.info("Doing bridge discovery")
         BridgesSearchHandler.is_running = True
-        tornado.ioloop.IOLoop.current().add_future(
-            playhouse.discover(), functools.partial(self.get_result, data['auto_add']))
+        tornado.ioloop.IOLoop.current().add_future(playhouse.discover(),
+                                                   functools.partial(get_result))
 
         return {"state": "success"}
 
-    @tornado.gen.coroutine
-    def get_result(self, auto_add, future):
-        try: # add_future seems to discard the returned future along with its exception
-            BridgesSearchHandler.new_bridges = future.result()
-            logging.info("Bridge discovery found bridges at %s",
-                        [b.ipaddress for b in BridgesSearchHandler.new_bridges])
-            BridgesSearchHandler.last_search = int(time.time())
-
-            if auto_add:
-                logging.info("Auto-adding bridges")
-                for b in BridgesSearchHandler.new_bridges:
-                    try:
-                        yield grid.add_bridge(b)
-                        logging.info("Added %s at %s", b.serial_number, b.ipaddress)
-                    except playhouse.BridgeAlreadyAddedException:
-                        logging.info("%s at %s already added", b.serial_number, b.ipaddress)
-                logging.info("Finished auto-adding bridges")
-
-            BridgesSearchHandler.is_running = False
-            logging.info("Bridge discovery finished")
-        except Exception:
-            traceback.print_exc()
 
 
     @tornado.gen.coroutine
@@ -328,7 +337,7 @@ class BridgesSearchHandler(AuthenticationHandler):
     @authenticated
     def get(self):
         if BridgesSearchHandler.is_running:
-            return errorcodes.CURRENTLY_SEARCHING
+            return errorcodes.E_CURRENTLY_SEARCHING
 
         return {
             "state": "success",
@@ -340,7 +349,7 @@ class BridgesSearchHandler(AuthenticationHandler):
         }
 
 
-class GridHandler(AuthenticationHandler):
+class GridHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
@@ -349,7 +358,7 @@ class GridHandler(AuthenticationHandler):
         g = [[(lamp['mac'], lamp['lamp']) if lamp is not None else None
               for lamp in row]
              for row in data]
-        grid.set_grid(g)
+        GRID.set_grid(g)
         logging.debug("Grid is set to %s", g)
         return {"state": "success"}
 
@@ -359,53 +368,53 @@ class GridHandler(AuthenticationHandler):
     def get(self):
         data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
                  for col in row]
-                for row in grid.grid]
-        return {"state": "success", "grid": data, "width": grid.width, "height": grid.height}
+                for row in GRID.grid]
+        return {"state": "success", "grid": data, "width": GRID.width, "height": GRID.height}
 
-class BridgesSaveHandler(AuthenticationHandler):
+class BridgesSaveHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def post(self):
         try:
-            with open(BRIDGE_CONFIG, 'r') as f:
+            with open(BRIDGE_CONFIG_FILE, 'r') as f:
                 conf = tornado.escape.json_decode(f.read())
         except (FileNotFoundError, ValueError):
             logging.warning("%s not found or contained invalid JSON, creating new file",
-                            BRIDGE_CONFIG)
+                            BRIDGE_CONFIG_FILE)
             conf = {}
 
-        conf['ips'] = [bridge.ipaddress for bridge in grid.bridges.values()]
+        conf['ips'] = [bridge.ipaddress for bridge in GRID.bridges.values()]
         conf['usernames'] = {bridge.serial_number: bridge.username
-                             for bridge in grid.bridges.values()}
+                             for bridge in GRID.bridges.values()}
 
-        with open(BRIDGE_CONFIG, 'w') as f:
+        with open(BRIDGE_CONFIG_FILE, 'w') as f:
             f.write(tornado.escape.json_encode(conf))
 
         return {"state": "success"}
 
-class GridSaveHandler(AuthenticationHandler):
+class GridSaveHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @authenticated
     def post(self):
         try:
-            with open(BRIDGE_CONFIG, 'r') as f:
+            with open(BRIDGE_CONFIG_FILE, 'r') as f:
                 conf = tornado.escape.json_decode(f.read())
         except (FileNotFoundError, ValueError):
             logging.warning("%s not found or contained invalid JSON, creating new file",
-                            BRIDGE_CONFIG)
+                            BRIDGE_CONFIG_FILE)
             conf = {}
 
-        conf['grid'] = grid.grid
+        conf['grid'] = GRID.grid
 
-        with open(BRIDGE_CONFIG, 'w') as f:
-            conf['grid'] = grid.grid
+        with open(BRIDGE_CONFIG_FILE, 'w') as f:
+            conf['grid'] = GRID.grid
             f.write(tornado.escape.json_encode(conf))
 
         return {"state": "success"}
 
-class DebugHandler(tornado.web.RequestHandler):
+class DebugHandler(BaseHandler):
     def get(self):
         website = """
 <!DOCTYPE html>
@@ -456,81 +465,27 @@ function send_post(){
         self.write(website)
 
 
-class AuthenticateHandler(tornado.web.RequestHandler):
+class AuthenticateHandler(BaseHandler):
     @tornado.gen.coroutine
     @return_as_json
     @parse_json({"password": str, "username": str})
     def post(self, data):
-        if config['require_password']:
-            if data['password'] == config['password']:
+        if CONFIG['require_password']:
+            if data['password'] == CONFIG['password']:
                 self.set_secure_cookie('user', data['username'])
                 return {"state": "success"}
             else:
-                return errorcodes.INVALID_PASSWORD
+                return errorcodes.E_INVALID_PASSWORD
         else:
-            return errorcodes.AUTH_NOT_ENABLED
+            return errorcodes.E_AUTH_NOT_ENABLED
 
 
-class StatusHandler(tornado.web.RequestHandler):
+class StatusHandler(BaseHandler):
     def get(self):
         pass
 
 
-# NOTE: every new instance will have a unique cookie secret,
-# meaning that cookies created by other instances will be incompatible
-# with this one
-application = tornado.web.Application([
-    (r'/lights', LightsHandler),
-    (r'/lights/all', LightsAllHandler),
-    (r'/bridges', BridgesHandler),
-    (r'/bridges/add', BridgesAddHandler),
-    (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
-    (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
-    (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
-    (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
-    (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
-    (r'/bridges/search', BridgesSearchHandler),
-    (r'/grid', GridHandler),
-    (r'/bridges/save', BridgesSaveHandler),
-    (r'/grid/save', GridSaveHandler),
-    (r'/debug', DebugHandler),
-    (r'/authenticate', AuthenticateHandler),
-    (r'/status', StatusHandler),
-], cookie_secret=os.urandom(256))
-
-
-@tornado.gen.coroutine
-def init_lightgrid(grid):
-    logging.info("Initializing the LightGrid")
-    logging.info("Reading bridge setup file (%s)", BRIDGE_CONFIG)
-    bridge_config = {"grid": [], "usernames": {}, "ips": []}
-    try:
-        with open(BRIDGE_CONFIG, 'r') as file:
-            bridge_config.update(tornado.escape.json_decode(file.read()))
-            logging.debug("Configuration was %s", bridge_config)
-
-            bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
-            logging.debug("Constructed grid %s", bridge_config["grid"])
-    except (FileNotFoundError, ValueError):
-        logging.warning("%s not found or contained invalid JSON, using empty grid", BRIDGE_CONFIG)
-
-    grid.set_usernames(bridge_config["usernames"])
-    grid.set_grid(bridge_config["grid"])
-
-    logging.info("Adding preconfigured bridges")
-
-    res, exc = yield playhouse.ExceptionCatcher({ip: grid.add_bridge(ip)
-                                                 for ip in bridge_config['ips']})
-    for ip, bridge in res.items():
-        logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
-    for ip, e in exc.items():
-        logging.info("Couldn't find a bridge at %s", ip)
-        logging.debug("", exc_info=(type(e), e, e.__traceback__))
-
-    logging.info("Finished adding bridges")
-
-
-if __name__ == "__main__":
+def init_logging():
     format_string = "%(created)d:%(levelname)s:%(module)s:%(funcName)s:%(lineno)d > %(message)s"
     formatter = logging.Formatter(format_string)
 
@@ -549,35 +504,95 @@ if __name__ == "__main__":
     logging.getLogger().addHandler(file_handler)
     logging.getLogger().addHandler(stderr_handler)
 
-    logging.info("Initializing light server")
 
-    logging.info("Creating empty LightGrid")
-    grid = playhouse.LightGrid(buffered=True)
-    init_lightgrid(grid) # will run when IO loop has started
+@tornado.gen.coroutine
+def init_lightgrid():
+    logging.info("Initializing the LightGrid")
 
-    logging.info("Reading configuration file (%s)", CONFIG)
+    logging.info("Reading bridge setup file (%s)", BRIDGE_CONFIG_FILE)
+    bridge_config = {"grid": [], "usernames": {}, "ips": []}
+    try:
+        with open(BRIDGE_CONFIG_FILE, 'r') as file:
+            bridge_config.update(tornado.escape.json_decode(file.read()))
+            logging.debug("Configuration was %s", bridge_config)
+
+            bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
+            logging.debug("Constructed grid %s", bridge_config["grid"])
+    except (FileNotFoundError, ValueError):
+        logging.warning("%s not found or contained invalid JSON, using empty grid",
+                        BRIDGE_CONFIG_FILE)
+
+    GRID.set_usernames(bridge_config["usernames"])
+    GRID.set_grid(bridge_config["grid"])
+
+    logging.info("Adding preconfigured bridges")
+
+    res, exc = yield playhouse.ExceptionCatcher({ip: GRID.add_bridge(ip)
+                                                 for ip in bridge_config['ips']})
+    for ip, bridge in res.items():
+        logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
+    for ip, e in exc.items():
+        logging.info("Couldn't find a bridge at %s", ip)
+        logging.debug("", exc_info=(type(e), e, e.__traceback__))
+
+    logging.info("Finished adding bridges")
+
+def init_http():
+    logging.info("Creating Application object")
+
+    # NOTE: every new instance will have a unique cookie secret,
+    # meaning that cookies created by other instances will be incompatible
+    # with this one
+    application = tornado.web.Application([
+        (r'/lights', LightsHandler),
+        (r'/lights/all', LightsAllHandler),
+        (r'/bridges', BridgesHandler),
+        (r'/bridges/add', BridgesAddHandler),
+        (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
+        (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
+        (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
+        (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
+        (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
+        (r'/bridges/search', BridgesSearchHandler),
+        (r'/grid', GridHandler),
+        (r'/bridges/save', BridgesSaveHandler),
+        (r'/grid/save', GridSaveHandler),
+        (r'/debug', DebugHandler),
+        (r'/authenticate', AuthenticateHandler),
+        (r'/status', StatusHandler),
+    ], cookie_secret=os.urandom(256))
+
+
+    logging.info("Reading configuration file (%s)", CONFIG_FILE)
 
     try:
-        config.update(json.load(open(CONFIG)))
+        CONFIG.update(json.load(open(CONFIG_FILE)))
     except FileNotFoundError:
-        logging.warning("%s not found, using default configuration values", CONFIG)
+        logging.warning("%s not found, using default configuration values", CONFIG_FILE)
 
-    if config['require_password']:
+    if CONFIG['require_password']:
         logging.info("This instance will require authentication")
     else:
         logging.warning("This instance will NOT require authentication")
 
-    if config['ssl']:
+    if CONFIG['ssl']:
         logging.info("Setting up HTTPS server")
         http_server = tornado.httpserver.HTTPServer(application, ssl_options={
-            "certfile": config['certfile'],
-            "keyfile": config['keyfile']
+            "certfile": CONFIG['certfile'],
+            "keyfile": CONFIG['keyfile']
         })
     else:
         logging.info("Setting up HTTP server")
         http_server = tornado.httpserver.HTTPServer(application)
 
-    http_server.listen(config['port'])
+    http_server.listen(CONFIG['port'])
 
-    logging.info("Server now listening at port %s", config['port'])
+if __name__ == "__main__":
+    init_logging()
+
+    init_lightgrid() # will run when IO loop has started
+
+    init_http()
+
+    logging.info("Server now listening at port %s", CONFIG['port'])
     tornado.ioloop.IOLoop.instance().start()
