@@ -1,4 +1,8 @@
 
+if __name__ == "__main__":
+    import logging.config
+    logging.config.fileConfig('logging.conf')
+
 import datetime
 import functools
 import inspect
@@ -485,26 +489,6 @@ class StatusHandler(BaseHandler):
         pass
 
 
-def init_logging():
-    format_string = "%(created)d:%(levelname)s:%(module)s:%(funcName)s:%(lineno)d > %(message)s"
-    formatter = logging.Formatter(format_string)
-
-    logging.basicConfig(filename="lightserver-all.log",
-                        level=logging.DEBUG,
-                        format=format_string)
-
-    file_handler = logging.FileHandler(filename="lightserver.log")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-
-    stderr_handler = logging.StreamHandler()
-    stderr_handler.setLevel(logging.INFO)
-    stderr_handler.setFormatter(formatter)
-
-    logging.getLogger().addHandler(file_handler)
-    logging.getLogger().addHandler(stderr_handler)
-
-
 @tornado.gen.coroutine
 def init_lightgrid():
     logging.info("Initializing the LightGrid")
@@ -532,7 +516,7 @@ def init_lightgrid():
     for ip, bridge in res.items():
         logging.info("Added bridge %s at %s", bridge.serial_number, bridge.ipaddress)
     for ip, e in exc.items():
-        logging.info("Couldn't find a bridge at %s", ip)
+        logging.warning("Couldn't find a bridge at %s", ip)
         logging.debug("", exc_info=(type(e), e, e.__traceback__))
 
     logging.info("Finished adding bridges")
@@ -588,8 +572,6 @@ def init_http():
     http_server.listen(CONFIG['port'])
 
 if __name__ == "__main__":
-    init_logging()
-
     init_lightgrid() # will run when IO loop has started
 
     init_http()
