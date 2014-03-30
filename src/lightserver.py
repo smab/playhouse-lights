@@ -282,8 +282,9 @@ class BridgeAddUserHandler(BaseHandler):
         username = data.get("username", None)
 
         try:
-            newname = yield GRID.bridges[mac].create_user("playhouse user", username)
-            return {"state": "success", "username": newname}
+            bridge = GRID.bridges[mac]
+            newname = yield bridge.create_user("playhouse user", username)
+            return {"state": "success", "username": newname, "valid_username": bridge.logged_in}
         except playhouse.NoLinkButtonPressedException:
             return errorcodes.E_NO_LINKBUTTON
         except Exception:

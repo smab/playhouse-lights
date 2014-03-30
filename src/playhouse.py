@@ -115,7 +115,8 @@ class Bridge:
         self.logged_in = False
 
         try:
-            if (yield self.send_request("GET", "/config", force_send=True))['name'] != "Philips hue":
+            if (yield self.send_request("GET", "/config",
+                                        force_send=True))['name'] != "Philips hue":
                 raise Exception()
 
             res = yield self.http_request("GET", "/description.xml")
@@ -309,7 +310,8 @@ class Bridge:
             #print(self.groups)
         except UnauthorizedUserException:
             if self.username is not None:
-                logging.warning("Couldn't send request to %s using username %s", self.serial_number, self.username)
+                logging.warning("Couldn't send request to %s using username %s",
+                                self.serial_number, self.username)
             self.logged_in = False
             self.gateway = None
             self.netmask = None
