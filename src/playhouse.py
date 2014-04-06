@@ -331,7 +331,8 @@ class Bridge:
         yield lr.read_until() # echo
         response = (yield lr.read_until(timeout=10)).decode()
         yield lr.close()
-        return re.match(r"\[Link,Touchlink,success,NwkAddr=([^,]+),pan=([^]]+)\]\n", response).groups()
+        return re.match(r"\[Link,Touchlink,success,NwkAddr=([^,]+),pan=([^]]+)\]\n",
+                        response).groups()
 
     @tornado.gen.coroutine
     def get_bridge_info(self):
