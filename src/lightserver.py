@@ -270,6 +270,16 @@ class BridgeLampSearchHandler(BaseHandler):
         yield GRID.bridges[mac].search_lights()
         return {"state": "success"}
 
+class BridgeResetBulbHandler(BaseHandler):
+    @tornado.gen.coroutine
+    @return_as_json
+    @authenticated
+    def post(self, mac):
+        if mac not in GRID.bridges:
+            return errorcodes.E_NO_SUCH_MAC.format(mac=mac)
+
+        nwkaddr, pan = yield GRID.bridges[mac].reset_nearby_bulb()
+        return {"state": "success", "nwkaddr": nwkaddr, "pan": pan}
 
 class BridgeAddUserHandler(BaseHandler):
     @tornado.gen.coroutine
@@ -538,6 +548,7 @@ def init_http():
         (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
         (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
         (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
+        (r'/bridges/([0-9a-f]{12})/resetbulb', BridgeResetBulbHandler),
         (r'/bridges/search', BridgesSearchHandler),
         (r'/grid', GridHandler),
         (r'/bridges/save', BridgesSaveHandler),

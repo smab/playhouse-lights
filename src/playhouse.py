@@ -13,11 +13,14 @@ import tornado.concurrent
 import tornado.escape
 import tornado.gen
 import tornado.httpclient
+import tornado.iostream
+
 try:
     import tornado.curl_httpclient
     tornado.httpclient.AsyncHTTPClient.configure(tornado.curl_httpclient.CurlAsyncHTTPClient)
 except ImportError:
     logging.warning("Couldn't import CurlAsyncHTTPClient, reverting to slow default implementation")
+
 
 class NoBridgeFoundException(Exception):
     pass
@@ -89,11 +92,88 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
         return results, exceptions
 
 
+class LineReader:
+
+    def __init__(self):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        self.stream = tornado.iostream.IOStream(self.socket)
+        self.stream.set_close_callback(self._closed)
+
+        self._future = None
+        self._is_connected = False
+        self._timeout_handler = None
+        self._ioloop = tornado.ioloop.IOLoop.current()
+        self._error = None
+
+    def _set_future(self):
+        if self._future is not None:
+            raise Exception("LineReader already running")
+        self._future = tornado.concurrent.Future()
+        return self._future
+
+    def _unset_future(self, result=None):
+        self._future.set_result(result)
+        self._future = None
+
+    def _set_timeout(self, timeout):
+        self._timeout_handler = self._ioloop.add_timeout(
+            datetime.timedelta(seconds=timeout),
+            self._timeout)
+
+    def _unset_timeout(self):
+        self._ioloop.remove_timeout(self._timeout_handler)
+
+    def _timeout(self):
+        self._error = socket.timeout()
+        self.stream.close()
+
+    def close(self):
+        future = self._set_future()
+        self.stream.close()
+        return future
+
+    def _closed(self):
+        if self._future is not None and (self._error or not self._is_connected):
+            self._future.set_exception(self._error or self.stream.error)
+            self._future = None
+        elif self._future is not None:
+            self._unset_future()
+
+    def connect(self, address, timeout=5):
+        future = self._set_future()
+        self.stream.connect(address, callback=self._connected)
+        self._set_timeout(timeout)
+        return future
+
+    def _connected(self):
+        self._unset_timeout()
+        self._is_connected = True
+        self._unset_future()
+
+    def write(self, data):
+        self.stream.write(data, callback=self._wrote)
+        return self._set_future()
+
+    def _wrote(self):
+        self._unset_future()
+
+    def read_until(self, delimiter=b'\n', timeout=5):
+        future = self._set_future()
+        self.stream.read_until(delimiter, callback=self._read)
+        self._set_timeout(timeout)
+        return future
+
+    def _read(self, data):
+        self._unset_timeout()
+        self._unset_future(data)
+
+
+
+
 class Bridge:
     # pylint: disable=too-many-instance-attributes
     ignoredkeys = {"transitiontime", "alert", "effect", "colormode", "reachable"}
 
-    #@classmethod
     @tornado.gen.coroutine
     def __new__(cls, ipaddress, username=None, defaults=None, timeout=2):
         #bridge = cls(ipaddress, username, defaults, timeout)
@@ -242,6 +322,16 @@ class Bridge:
     @tornado.gen.coroutine
     def search_lights(self):
         return (yield self.send_request("POST", "/lights"))
+
+    @tornado.gen.coroutine
+    def reset_nearby_bulb(self):
+        lr = LineReader()
+        yield lr.connect((self.ipaddress, 30000))
+        yield lr.write(b'[Link,Touchlink]')
+        yield lr.read_until() # echo
+        response = (yield lr.read_until(timeout=10)).decode()
+        yield lr.close()
+        return re.match(r"\[Link,Touchlink,success,NwkAddr=([^,]+),pan=([^]]+)\]\n", response).groups()
 
     @tornado.gen.coroutine
     def get_bridge_info(self):
@@ -446,10 +536,10 @@ class LightGrid:
         return exceptions
 
 
-class UDPWrapper:
-    def __init__(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.setblocking(0)
+class AsyncSocket(socket.socket):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.setblocking(False)
 
         self._responses = []
         self._io_loop = tornado.ioloop.IOLoop.current()
@@ -457,22 +547,16 @@ class UDPWrapper:
         self._callback = None
         self._timeout_handle = None
 
-    def setsockopt(self, *args, **kwargs):
-        self.socket.setsockopt(*args, **kwargs)
-
-    def sendto(self, *args, **kwargs):
-        self.socket.sendto(*args, **kwargs)
-
     @tornado.gen.coroutine
     def wait_for_responses(self, timeout=2):
         self._responses = []
         self._timeout = timeout
-        self._callback = yield tornado.gen.Callback(self.socket.fileno())
+        self._callback = yield tornado.gen.Callback(self.fileno())
 
-        self._io_loop.add_handler(self.socket.fileno(), self._fetch_response, self._io_loop.READ)
+        self._io_loop.add_handler(self.fileno(), self._fetch_response, self._io_loop.READ)
         self._set_timeout()
 
-        yield tornado.gen.Wait(self.socket.fileno())
+        yield tornado.gen.Wait(self.fileno())
 
         return self._responses
 
@@ -483,7 +567,7 @@ class UDPWrapper:
     def _fetch_response(self, _fd, _events):
         while True:
             try:
-                self._responses.append(self.socket.recvfrom(1024))
+                self._responses.append(self.recvfrom(1024))
                 self._io_loop.remove_timeout(self._timeout_handle)
                 self._set_timeout()
             except socket.error as e:
@@ -492,13 +576,13 @@ class UDPWrapper:
                 return
 
     def _on_timeout(self):
-        self._io_loop.remove_handler(self.socket.fileno())
+        self._io_loop.remove_handler(self.fileno())
         self._callback(self._responses)
 
 
 @tornado.gen.coroutine
 def discover(attempts=2, timeout=2):
-    s = UDPWrapper()
+    s = AsyncSocket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
 
@@ -515,8 +599,8 @@ def discover(attempts=2, timeout=2):
         for _ in range(2):
             s.sendto(message, ("239.255.255.250", 1900))
 
-        logging.debug("Waiting for responses")
-        for raw, (address, port) in (yield s.wait_for_responses(timeout=timeout)):
+        responses = yield s.wait_for_responses(timeout=timeout)
+        for raw, (address, port) in responses:
             logging.debug("%s:%s says: %s", address, port, raw)
 
             # NOTE: we'll skip doing any checks in particular here,
