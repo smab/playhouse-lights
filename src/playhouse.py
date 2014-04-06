@@ -594,6 +594,15 @@ def discover(attempts=2, timeout=2):
               b'MX: 3\r\n\r\n'
 
     locations = set()
+    try:
+        logging.info("Fetching bridges from meethue.com")
+        nupnp_response = yield tornado.httpclient.AsyncHTTPClient().fetch(
+            "http://www.methue.com/api/nupnp", request_timeout=4)
+        nupnp_bridges = tornado.escape.json_decode(nupnp_response.body)
+        logging.debug("Response from meethue.com was %s", nupnp_bridges)
+        locations.update(bridge['internalipaddress'] for bridge in nupnp_bridges)
+    except tornado.httpclient.HTTPError:
+        logging.info("Couldn't connect to meethue.com")
 
     for _ in range(attempts):
         logging.debug("Broadcasting %s", message)
