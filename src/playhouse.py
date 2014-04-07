@@ -22,6 +22,9 @@ except ImportError:
     logging.warning("Couldn't import CurlAsyncHTTPClient, reverting to slow default implementation")
 
 
+class TaskTimedOutException(Exception):
+    pass
+
 class NoBridgeFoundException(Exception):
     pass
 
@@ -32,6 +35,9 @@ class OutsideGridException(Exception):
     pass
 
 class NoBridgeAtCoordinateException(Exception):
+    pass
+
+class BulbNotResetException(Exception):
     pass
 
 class HueAPIException(Exception):
@@ -92,82 +98,44 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
         return results, exceptions
 
 
-class LineReader:
+class TimeoutTask(tornado.gen.YieldPoint):
+    def __init__(self, func, *args, timeout=2, **kwargs):
+        assert "callback" not in kwargs
+        self.args = args
+        self.kwargs = kwargs
+        self.timeout = timeout
+        self.func = func
+        self.has_timed_out = False
+        self.timeout_handler = None
+        self.ioloop = tornado.ioloop.IOLoop.current()
 
-    def __init__(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-        self.stream = tornado.iostream.IOStream(self.socket)
-        self.stream.set_close_callback(self._closed)
+    def start(self, runner):
+        self.runner = runner
+        self.key = object()
+        runner.register_callback(self.key)
+        self.kwargs["callback"] = runner.result_callback(self.key)
+        self.timeout_handler = self.ioloop.add_timeout(datetime.timedelta(seconds=self.timeout),
+                                                       self.timed_out)
+        self.func(*self.args, **self.kwargs)
 
-        self._future = None
-        self._is_connected = False
-        self._timeout_handler = None
-        self._ioloop = tornado.ioloop.IOLoop.current()
-        self._error = None
+    def timed_out(self):
+        self.timeout_handler = None
+        self.has_timed_out = True
+        self.kwargs["callback"]()
 
-    def _set_future(self):
-        if self._future is not None:
-            raise Exception("LineReader already running")
-        self._future = tornado.concurrent.Future()
-        return self._future
+    def is_ready(self):
+        ir = self.runner.is_ready(self.key)
+        if ir and not self.has_timed_out:
+            self.ioloop.remove_timeout(self.timeout_handler)
+            self.timeout_handler = None
+        return self.runner.is_ready(self.key)
 
-    def _unset_future(self, result=None):
-        self._future.set_result(result)
-        self._future = None
-
-    def _set_timeout(self, timeout):
-        self._timeout_handler = self._ioloop.add_timeout(
-            datetime.timedelta(seconds=timeout),
-            self._timeout)
-
-    def _unset_timeout(self):
-        self._ioloop.remove_timeout(self._timeout_handler)
-
-    def _timeout(self):
-        self._error = socket.timeout()
-        self.stream.close()
-
-    def close(self):
-        future = self._set_future()
-        self.stream.close()
-        return future
-
-    def _closed(self):
-        if self._future is not None and (self._error or not self._is_connected):
-            self._future.set_exception(self._error or self.stream.error)
-            self._future = None
-        elif self._future is not None:
-            self._unset_future()
-
-    def connect(self, address, timeout=5):
-        future = self._set_future()
-        self.stream.connect(address, callback=self._connected)
-        self._set_timeout(timeout)
-        return future
-
-    def _connected(self):
-        self._unset_timeout()
-        self._is_connected = True
-        self._unset_future()
-
-    def write(self, data):
-        self.stream.write(data, callback=self._wrote)
-        return self._set_future()
-
-    def _wrote(self):
-        self._unset_future()
-
-    def read_until(self, delimiter=b'\n', timeout=5):
-        future = self._set_future()
-        self.stream.read_until(delimiter, callback=self._read)
-        self._set_timeout(timeout)
-        return future
-
-    def _read(self, data):
-        self._unset_timeout()
-        self._unset_future(data)
-
-
+    def get_result(self):
+        res = self.runner.pop_result(self.key)
+        if not self.has_timed_out:
+            return res
+        else:
+            raise TaskTimedOutException
 
 
 class Bridge:
@@ -195,22 +163,18 @@ class Bridge:
         self.logged_in = False
 
         try:
-            if (yield self.send_request("GET", "/config",
-                                        force_send=True))['name'] != "Philips hue":
-                raise Exception()
+            assert (yield self.send_request("GET", "/config",
+                                            force_send=True))['name'] == "Philips hue"
+
+            # assume Philips Hue bridge from here on
 
             res = yield self.http_request("GET", "/description.xml")
-            if res.code != 200:
-                raise Exception()
 
             et, ns = parse_description(res.buffer)
-            desc = et.find('./default:device/default:modelDescription', namespaces=ns)
-            if desc.text != "Philips hue Personal Wireless Lighting":
-                raise Exception()
-
             self.serial_number = et.find('./default:device/default:serialNumber',
                                            namespaces=ns).text
-        except Exception:
+
+        except (ValueError, UnicodeDecodeError, AssertionError, tornado.httpclient.HTTPError):
             raise NoBridgeFoundException("{}: not a Philips Hue bridge".format(ipaddress))
 
         yield self.update_info()
@@ -325,14 +289,42 @@ class Bridge:
 
     @tornado.gen.coroutine
     def reset_nearby_bulb(self):
-        lr = LineReader()
-        yield lr.connect((self.ipaddress, 30000))
-        yield lr.write(b'[Link,Touchlink]')
-        yield lr.read_until() # echo
-        response = (yield lr.read_until(timeout=10)).decode()
-        yield lr.close()
-        return re.match(r"\[Link,Touchlink,success,NwkAddr=([^,]+),pan=([^]]+)\]\n",
-                        response).groups()
+        sock = socket.socket()
+        stream = tornado.iostream.IOStream(sock)
+        try:
+            logging.debug("Connecting to %s at port 30000", self.ipaddress)
+            yield TimeoutTask(stream.connect, (self.ipaddress, 30000))
+            logging.debug("Sending [Link,Touchlink]")
+            yield TimeoutTask(stream.write, b'[Link,Touchlink]')
+
+            echo = yield TimeoutTask(stream.read_until, b'\n')
+            logging.debug("Got %s as an echo response", echo)
+
+            if echo != b'[Link,Touchlink]\n':
+                logging.debug("Echo response was not [Link,Touchlink]")
+                raise BulbNotResetException
+
+            response = (yield TimeoutTask(stream.read_until, b'\n', timeout=10)).decode()
+            logging.debug("Got reset response %s", response)
+
+            if response == '[Link,Touchlink,failed]\n':
+                logging.debug("Bridge failed to reset a bulb")
+                raise BulbNotResetException
+
+            match = re.match(r"\[Link,Touchlink,success,NwkAddr=([^,]+),pan=([^]]+)\]\n",
+                             response)
+            if match:
+                logging.debug("Reset bulb has NwkAddr %s and pan %s", *match.groups())
+                return match.groups()
+            else:
+                logging.debug("Unexpected reset response %s", response)
+                raise BulbNotResetException
+        except TaskTimedOutException:
+            logging.debug("Reset attempt timed out")
+            raise BulbNotResetException
+        finally:
+            logging.debug("Closing stream used for bulb reset")
+            stream.close()
 
     @tornado.gen.coroutine
     def get_bridge_info(self):
@@ -597,7 +589,7 @@ def discover(attempts=2, timeout=2):
     try:
         logging.info("Fetching bridges from meethue.com")
         nupnp_response = yield tornado.httpclient.AsyncHTTPClient().fetch(
-            "http://www.methue.com/api/nupnp", request_timeout=4)
+            "http://www.meethue.com/api/nupnp", request_timeout=4)
         nupnp_bridges = tornado.escape.json_decode(nupnp_response.body)
         logging.debug("Response from meethue.com was %s", nupnp_bridges)
         locations.update(bridge['internalipaddress'] for bridge in nupnp_bridges)
