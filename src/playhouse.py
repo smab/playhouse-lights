@@ -537,21 +537,18 @@ class AsyncSocket(socket.socket):
         self._responses = []
         self._io_loop = tornado.ioloop.IOLoop.current()
         self._timeout = 0
-        self._callback = None
+        self._future = None
         self._timeout_handle = None
 
-    @tornado.gen.coroutine
     def wait_for_responses(self, timeout=2):
         self._responses = []
         self._timeout = timeout
-        self._callback = yield tornado.gen.Callback(self.fileno())
+        self._future = tornado.concurrent.Future()
 
         self._io_loop.add_handler(self.fileno(), self._fetch_response, self._io_loop.READ)
         self._set_timeout()
 
-        yield tornado.gen.Wait(self.fileno())
-
-        return self._responses
+        return self._future
 
     def _set_timeout(self):
         self._timeout_handle = self._io_loop.add_timeout(
@@ -570,7 +567,7 @@ class AsyncSocket(socket.socket):
 
     def _on_timeout(self):
         self._io_loop.remove_handler(self.fileno())
-        self._callback(self._responses)
+        self._future.set_result(self._responses)
 
 
 @tornado.gen.coroutine
