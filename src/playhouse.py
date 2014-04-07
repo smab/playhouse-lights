@@ -171,11 +171,29 @@ class LineReader:
 
 
 class Bridge:
+
     # pylint: disable=too-many-instance-attributes
+    """ 
+    Instances of the Bridge handle a connection to a specific Hue bridge.
+    
+    Hue bridges communicate through a RESTful JSON API through TCP port 80. 
+    This class wraps this RESTful interface and provides a Python API for
+    convenient Hue bridge operation. The function for setting the current
+    state of a particular lamp uses the Hue light state names, check
+    http://developers.meethue.com/1_lightsapi.html#16_set_light_state for reference.
+    """
     ignoredkeys = {"transitiontime", "alert", "effect", "colormode", "reachable"}
 
     @tornado.gen.coroutine
     def __new__(cls, ipaddress, username=None, defaults=None, timeout=2):
+        """
+        Create a new Bridge object.
+        
+        ipaddress - The IP address for this bridge
+        username - Username as described in Hue documentation. Required for almost all commands.
+        defaults - A dictionary of "default" state changes. These changes are included whenever the state is set, unless overridden by the provided state change argument.
+        timeout - Time until a HTTP request times out, in seconds.
+        """
         #bridge = cls(ipaddress, username, defaults, timeout)
         self = super(Bridge, cls).__new__(cls)
 
@@ -221,10 +239,17 @@ class Bridge:
         pass
 
     def set_defaults(self, defaults):
+        """Set the current "default" state changes. These changes are included whenever the state is set, unless overridden by the provided state change argument"""
         self.defaults = defaults
 
     @tornado.gen.coroutine
     def http_request(self, method, url, body=None):
+        """Send a HTTP request to the bridge.
+        
+        method - HTTP request method (POST/GET/PUT/DELETE)
+        url - The URL to send this request to.
+        body - HTTP POST request body, as a string
+        """
         logging.debug("Sending request %s %s (data: %s) to %s",
                       method, url, body, self.ipaddress)
         response = yield self.client.fetch("http://{}{}".format(self.ipaddress, url),
@@ -234,6 +259,12 @@ class Bridge:
 
     @tornado.gen.coroutine
     def send_raw(self, method, url, body=None):
+        """Send a HTTP request to the bridge.
+        
+        method - HTTP request method (POST/GET/PUT/DELETE)
+        url - The URL to send this request to.
+        body - HTTP POST request body, as a Python dictionary. This object will be converted to JSON.
+        """
         if body is not None:
             body = json.dumps(body)
 
@@ -256,6 +287,13 @@ class Bridge:
 
     @tornado.gen.coroutine
     def send_request(self, method, url, body=None, force_send=False):
+        """Send a HTTP request to the bridge. 
+        
+        method - HTTP request method (POST/GET/PUT/DELETE)
+        url - The URL to send this request to. Unlike the other HTTP
+        request methods, this argument should only include the part of the URL which is after the username.
+        body - HTTP POST request body, as a Python dictionary. This object will be converted to JSON.
+        """
         username = self.username
         if username is None and not force_send:
             raise UnauthorizedUserException({"error": {"type": 1, "address": url,
@@ -281,6 +319,12 @@ class Bridge:
 
     @tornado.gen.coroutine
     def set_state(self, i, **args):
+        """
+        Set state of a particular lamp.
+        
+        i - ID number for light
+        args - Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        """
         args = self._state_preprocess(args)
 
         # Remove unnecessary commands
@@ -300,6 +344,13 @@ class Bridge:
 
     @tornado.gen.coroutine
     def set_group(self, i, **args):
+        """
+        Set state of a particular lamp group.
+        
+        i - ID number for group
+        args - Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        """
+    
         args = self._state_preprocess(args)
         keys = self.light_data.keys() if i == 0 else self.groups[i]
         for k, v in args.items():
@@ -340,11 +391,25 @@ class Bridge:
 
     @tornado.gen.coroutine
     def set_username(self, username):
+        """
+        Set the user name for this bridge. A valid user name is required to execute most commands.
+        
+        username - The new user name
+        """
         self.username = username
         yield self.update_info()
 
     @tornado.gen.coroutine
     def create_user(self, devicetype, username=None):
+        """
+        Create a new user for this bridge. A valid user name is required to execute most commands.
+        In order to create a new user, the link button on the Hue bridge must pressed before this
+        command is executed.
+        
+        devicetype - The 'type' of user.
+        username - The new user name. Optional argument, a random user name will be generated by the bridge
+        if a user name is not provided.
+        """
         body = {'devicetype': devicetype}
         if username is not None:
             body['username'] = username
@@ -354,6 +419,11 @@ class Bridge:
 
     @tornado.gen.coroutine
     def create_group(self, lights, name=None):
+        """Create a new group for this bridge.
+        
+        lights - a list of lamp IDs (integers).
+        name - Name for this group, optional argument.
+        """
         body = {'lights':[str(x) for x in lights]}
         if name is not None:
             body['name'] = name
@@ -361,19 +431,21 @@ class Bridge:
         match = re.match(r"/groups/(\d+)", res[0]["success"]["id"])
         group = int(match.group(1))
         self.groups[group] = lights.copy()
-
-
         return res
 
     @tornado.gen.coroutine
     def delete_group(self, i):
-
+        """Delete a new group from this bridge.
+        
+        i - group ID
+        """
         res = (yield self.send_request("DELETE", "/groups/{}".format(i)))[0]
         del self.groups[i]
         return res
 
     @tornado.gen.coroutine
     def update_info(self):
+        """Update the Hue bridge metadata."""
         #print("Update " + str(self.username))
         try:
             data = yield self.send_request("GET", "/")
