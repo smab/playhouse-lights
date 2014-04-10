@@ -5,6 +5,7 @@ The result is an ErrorCodeDict of the format:
   {"status": "error", "errorcode": "ERROR_TYPE", "errormessage": "human-readable error message"}
 """
 
+E_INTERNAL_ERROR = "an internal error occured; please see the light server logs"
 E_NOT_UNICODE = "couldn't decode as UTF-8"
 E_INVALID_JSON = "invalid JSON"
 E_INVALID_FORMAT = "the JSON was in an unexpected format"

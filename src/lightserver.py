@@ -12,6 +12,7 @@ import os
 import time
 import traceback
 
+import tornado.concurrent
 import tornado.escape
 import tornado.gen
 import tornado.httpserver
@@ -108,8 +109,27 @@ def authenticated(func):
             return func(self, *args, **kwargs)
     return new_func
 
+def error_handler(func):
+    @tornado.gen.coroutine
+    @functools.wraps(func)
+    def new_func(self, *args, **kwargs):
+        try:
+            result = func(self, *args, **kwargs)
+            if isinstance(result, tornado.concurrent.Future):
+                yield result
+        except RequestInvalidUnicodeException:
+            self.write_json(errorcodes.E_NOT_UNICODE)
+        except RequestInvalidJSONException:
+            self.write_json(errorcodes.E_INVALID_JSON)
+        except RequestInvalidFormatException:
+            self.write_json(errorcodes.E_INVALID_FORMAT)
+        except Exception as e: # should not happen
+            self.write_json(errorcodes.E_INTERNAL_ERROR)
+            logging.exception("Received an unexpected exception!")
+    return new_func
 
 class LightsHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self):
@@ -145,6 +165,7 @@ class LightsHandler(BaseHandler):
 
 
 class LightsAllHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self):
@@ -154,6 +175,7 @@ class LightsAllHandler(BaseHandler):
         self.write_json({"state": "success"})
 
 class BridgesHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def get(self):
@@ -175,6 +197,7 @@ class BridgesHandler(BaseHandler):
         self.write_json(res)
 
 class BridgesAddHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self):
@@ -201,6 +224,7 @@ class BridgesAddHandler(BaseHandler):
 
 
 class BridgesMacHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, mac):
@@ -212,6 +236,7 @@ class BridgesMacHandler(BaseHandler):
             self.write_json({"state": "success", "username": data['username'],
                             "valid_username": GRID.bridges[mac].logged_in})
 
+    @error_handler
     @authenticated
     def delete(self, mac):
         if mac not in GRID.bridges:
@@ -222,6 +247,7 @@ class BridgesMacHandler(BaseHandler):
 
 
 class BridgeLightsHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, mac):
@@ -236,6 +262,7 @@ class BridgeLightsHandler(BaseHandler):
 
 
 class BridgeLightsAllHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, data, mac):
@@ -249,6 +276,7 @@ class BridgeLightsAllHandler(BaseHandler):
 
 
 class BridgeLampSearchHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, mac):
@@ -259,6 +287,7 @@ class BridgeLampSearchHandler(BaseHandler):
             self.write_json({"state": "success"})
 
 class BridgeResetBulbHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, mac):
@@ -269,6 +298,7 @@ class BridgeResetBulbHandler(BaseHandler):
             self.write_json({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
 
 class BridgeAddUserHandler(BaseHandler):
+    @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self, mac):
@@ -295,6 +325,7 @@ class BridgesSearchHandler(BaseHandler):
     last_search = -1
     is_running = False
 
+    @error_handler
     @authenticated
     def post(self, data):
         data = self.read_json({"auto_add": bool})
@@ -333,7 +364,7 @@ class BridgesSearchHandler(BaseHandler):
         self.write_json({"state": "success"})
 
 
-
+    @error_handler
     @authenticated
     def get(self):
         if BridgesSearchHandler.is_running:
@@ -350,6 +381,7 @@ class BridgesSearchHandler(BaseHandler):
 
 
 class GridHandler(BaseHandler):
+    @error_handler
     @authenticated
     def post(self):
         data = self.read_json([[({"mac": str, "lamp": int}, type(None))]])
@@ -360,6 +392,7 @@ class GridHandler(BaseHandler):
         logging.debug("Grid is set to %s", g)
         self.write_json({"state": "success"})
 
+    @error_handler
     @authenticated
     def get(self):
         data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
@@ -369,6 +402,7 @@ class GridHandler(BaseHandler):
                          "width": GRID.width, "height": GRID.height})
 
 class BridgesSaveHandler(BaseHandler):
+    @error_handler
     @authenticated
     def post(self):
         try:
@@ -389,6 +423,7 @@ class BridgesSaveHandler(BaseHandler):
         self.write_json({"state": "success"})
 
 class GridSaveHandler(BaseHandler):
+    @error_handler
     @authenticated
     def post(self):
         try:
@@ -459,6 +494,7 @@ function send_post(){
 
 
 class AuthenticateHandler(BaseHandler):
+    @error_handler
     def post(self, data):
         data = self.read_json({"password": str, "username": str})
         if CONFIG['require_password']:
