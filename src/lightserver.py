@@ -265,7 +265,7 @@ class BridgeLightsAllHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
-    def post(self, data, mac):
+    def post(self, mac):
         data = self.read_json(dict)
         if mac not in GRID.bridges:
             self.write_json(errorcodes.E_NO_SUCH_MAC.format(mac=mac))
@@ -327,7 +327,7 @@ class BridgesSearchHandler(BaseHandler):
 
     @error_handler
     @authenticated
-    def post(self, data):
+    def post(self):
         data = self.read_json({"auto_add": bool})
         if BridgesSearchHandler.is_running:
             self.write_json(errorcodes.E_CURRENTLY_SEARCHING)
@@ -495,7 +495,7 @@ function send_post(){
 
 class AuthenticateHandler(BaseHandler):
     @error_handler
-    def post(self, data):
+    def post(self):
         data = self.read_json({"password": str, "username": str})
         if CONFIG['require_password']:
             if data['password'] == CONFIG['password']:
