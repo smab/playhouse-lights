@@ -99,6 +99,26 @@ class BaseHandler(tornado.web.RequestHandler):
         logging.debug("Sent response %s", data)
         self.write(tornado.escape.json_encode(data))
 
+def save_grid_changes():
+    try:
+        with open(BRIDGE_CONFIG_FILE, 'r') as f:
+            conf = tornado.escape.json_decode(f.read())
+    except (FileNotFoundError, ValueError):
+        logging.warning("%s not found or contained invalid JSON, creating new file",
+                        BRIDGE_CONFIG_FILE)
+        conf = {"usernames": {}, "ips": []}
+
+    conf['grid'] = GRID.grid
+    conf['ips'] = list(set(conf['ips']) | set(bridge.ipaddress for bridge in GRID.bridges.values()))
+    conf.update({ # 'update' in order to keep old usernames
+        mac: bridge.username for mac, bridge in GRID.bridges.items() if bridge.logged_in
+    })
+
+    json_data = tornado.escape.json_encode(conf)
+    with open(BRIDGE_CONFIG_FILE, 'w') as f:
+        f.write(json_data)
+        logging.info("Wrote %s to %s", conf, BRIDGE_CONFIG_FILE)
+
 
 def authenticated(func):
     @functools.wraps(func)
@@ -205,6 +225,7 @@ class BridgesAddHandler(BaseHandler):
         try:
             username = data.get("username", None)
             bridge = yield GRID.add_bridge(data['ip'], username)
+            save_grid_changes()
         except playhouse.BridgeAlreadyAddedException:
             self.write_json(errorcodes.E_BRIDGE_ALREADY_ADDED)
         except:
@@ -233,6 +254,7 @@ class BridgesMacHandler(BaseHandler):
             self.write_json(errorcodes.E_NO_SUCH_MAC.format(mac=mac))
         else:
             yield GRID.bridges[mac].set_username(data['username'])
+            save_grid_changes()
             self.write_json({"state": "success", "username": data['username'],
                             "valid_username": GRID.bridges[mac].logged_in})
 
@@ -243,6 +265,7 @@ class BridgesMacHandler(BaseHandler):
             self.write_json(errorcodes.E_NO_SUCH_MAC.format(mac=mac))
         else:
             del GRID.bridges[mac]
+            save_grid_changes()
             self.write_json({"state": "success"})
 
 
@@ -311,6 +334,7 @@ class BridgeAddUserHandler(BaseHandler):
             try:
                 bridge = GRID.bridges[mac]
                 newname = yield bridge.create_user("playhouse user", username)
+                save_grid_changes()
                 self.write_json({"state": "success", "username": newname,
                                  "valid_username": bridge.logged_in})
             except playhouse.NoLinkButtonPressedException:
@@ -350,6 +374,7 @@ class BridgesSearchHandler(BaseHandler):
                         except playhouse.BridgeAlreadyAddedException:
                             logging.info("%s at %s already added", b.serial_number, b.ipaddress)
                     logging.info("Finished auto-adding bridges")
+                    save_grid_changes()
 
                 BridgesSearchHandler.is_running = False
                 logging.info("Bridge discovery finished")
@@ -389,6 +414,9 @@ class GridHandler(BaseHandler):
               for lamp in row]
              for row in data]
         GRID.set_grid(g)
+
+        save_grid_changes()
+
         logging.debug("Grid is set to %s", g)
         self.write_json({"state": "success"})
 
@@ -400,47 +428,6 @@ class GridHandler(BaseHandler):
                 for row in GRID.grid]
         self.write_json({"state": "success", "grid": data,
                          "width": GRID.width, "height": GRID.height})
-
-class BridgesSaveHandler(BaseHandler):
-    @error_handler
-    @authenticated
-    def post(self):
-        try:
-            with open(BRIDGE_CONFIG_FILE, 'r') as f:
-                conf = tornado.escape.json_decode(f.read())
-        except (FileNotFoundError, ValueError):
-            logging.warning("%s not found or contained invalid JSON, creating new file",
-                            BRIDGE_CONFIG_FILE)
-            conf = {}
-
-        conf['ips'] = [bridge.ipaddress for bridge in GRID.bridges.values()]
-        conf['usernames'] = {bridge.serial_number: bridge.username
-                             for bridge in GRID.bridges.values()}
-
-        with open(BRIDGE_CONFIG_FILE, 'w') as f:
-            f.write(tornado.escape.json_encode(conf))
-
-        self.write_json({"state": "success"})
-
-class GridSaveHandler(BaseHandler):
-    @error_handler
-    @authenticated
-    def post(self):
-        try:
-            with open(BRIDGE_CONFIG_FILE, 'r') as f:
-                conf = tornado.escape.json_decode(f.read())
-        except (FileNotFoundError, ValueError):
-            logging.warning("%s not found or contained invalid JSON, creating new file",
-                            BRIDGE_CONFIG_FILE)
-            conf = {}
-
-        conf['grid'] = GRID.grid
-
-        with open(BRIDGE_CONFIG_FILE, 'w') as f:
-            conf['grid'] = GRID.grid
-            f.write(tornado.escape.json_encode(conf))
-
-        self.write_json({"state": "success"})
 
 class DebugHandler(BaseHandler):
     def get(self):
@@ -519,8 +506,8 @@ def init_lightgrid():
     logging.info("Reading bridge setup file (%s)", BRIDGE_CONFIG_FILE)
     bridge_config = {"grid": [], "usernames": {}, "ips": []}
     try:
-        with open(BRIDGE_CONFIG_FILE, 'r') as file:
-            bridge_config.update(tornado.escape.json_decode(file.read()))
+        with open(BRIDGE_CONFIG_FILE, 'r') as f:
+            bridge_config.update(tornado.escape.json_decode(f.read()))
             logging.debug("Configuration was %s", bridge_config)
 
             bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
@@ -550,21 +537,21 @@ def init_http():
     # NOTE: every new instance will have a unique cookie secret,
     # meaning that cookies created by other instances will be incompatible
     # with this one
+    # NOTE: make sure to call save_grid_changes from any method that somehow
+    # modifies the LightGrid (adds/removes bridges, changes username, changed the grid, etc)
     application = tornado.web.Application([
         (r'/lights', LightsHandler),
         (r'/lights/all', LightsAllHandler),
         (r'/bridges', BridgesHandler),
-        (r'/bridges/add', BridgesAddHandler),
-        (r'/bridges/([0-9a-f]{12})', BridgesMacHandler),
+        (r'/bridges/add', BridgesAddHandler), # POST save_grid_changes
+        (r'/bridges/([0-9a-f]{12})', BridgesMacHandler), # POST/DELETE save_grid_changes
         (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
-        (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler),
+        (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler), # POST save_grid_changes
         (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
         (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
         (r'/bridges/([0-9a-f]{12})/resetbulb', BridgeResetBulbHandler),
-        (r'/bridges/search', BridgesSearchHandler),
-        (r'/grid', GridHandler),
-        (r'/bridges/save', BridgesSaveHandler),
-        (r'/grid/save', GridSaveHandler),
+        (r'/bridges/search', BridgesSearchHandler), # POST save_grid_changes
+        (r'/grid', GridHandler), # POST save_grid_changes
         (r'/debug', DebugHandler),
         (r'/authenticate', AuthenticateHandler),
         (r'/status', StatusHandler),
@@ -574,9 +561,11 @@ def init_http():
     logging.info("Reading configuration file (%s)", CONFIG_FILE)
 
     try:
-        CONFIG.update(json.load(open(CONFIG_FILE)))
-    except FileNotFoundError:
-        logging.warning("%s not found, using default configuration values", CONFIG_FILE)
+        with open(CONFIG_FILE) as f:
+            CONFIG.update(json.load(f))
+    except (FileNotFoundError, ValueError):
+        logging.warning("%s not found or contained invalid JSON, " \
+                        "using default configuration values: %s", CONFIG_FILE, CONFIG)
 
     if CONFIG['require_password']:
         logging.info("This instance will require authentication")
