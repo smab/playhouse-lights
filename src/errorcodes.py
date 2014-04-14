@@ -5,21 +5,25 @@ The result is an ErrorCodeDict of the format:
   {"status": "error", "errorcode": "ERROR_TYPE", "errormessage": "human-readable error message"}
 """
 
+
 E_INTERNAL_ERROR = "an internal error occured; please see the light server logs"
 E_NOT_UNICODE = "couldn't decode as UTF-8"
 E_INVALID_JSON = "invalid JSON"
 E_INVALID_FORMAT = "the JSON was in an unexpected format"
-E_BRIDGE_NOT_FOUND = "couldn't find a Hue bridge at given address '{ip}'"
+E_BRIDGE_NOT_FOUND = "couldn't find a Hue bridge at given address"
 E_BRIDGE_ALREADY_ADDED = "bridge has already been added to the server"
-E_NO_SUCH_MAC = "the server does not know of a bridge with the MAC address '{mac}'"
+E_NO_SUCH_MAC = "the server does not know of a bridge with the given MAC address"
 E_CURRENTLY_SEARCHING = "currently searching for bridges"
 E_NOT_IMPLEMENTED = "feature not implemented yet"
 E_NO_LINKBUTTON = "link button not pressed"
+E_INVALID_USERNAME = "could not send request to bridge with the MAC address '{mac}' " \
+    "using the username {username}"
 E_NOT_LOGGED_IN = "user has not yet authenticated using /authenticate, " \
     "or 'user' cookie was malformed"
 E_INVALID_PASSWORD = "the supplied password was invalid"
 E_AUTH_NOT_ENABLED = "authentication is not enabled for this server instance"
-E_INVALID_NAME = "user name is too short"
+E_INVALID_NAME = "user name is too short or otherwise invalid"
+
 
 class ErrorCodeDict(dict):
     """A dictionary for storing error messages.
@@ -35,9 +39,39 @@ class ErrorCodeDict(dict):
         """Add new key/value pairs to the dictionary."""
         return ErrorCodeDict(self, **kwargs)
 
-
 for ec in list(globals()):
     if ec.startswith("E_"):
         globals()[ec] = ErrorCodeDict({"state": "error",
                                        "errorcode": ec[2:],
                                        "errormessage": globals()[ec]})
+
+
+class LightserverException(Exception):
+    error = None
+
+class RequestInvalidUnicodeException(LightserverException):
+    error = E_NOT_UNICODE
+
+class RequestInvalidJSONException(LightserverException):
+    error = E_INVALID_JSON
+
+class RequestInvalidFormatException(LightserverException):
+    error = E_INVALID_FORMAT
+
+class NotLoggedInException(LightserverException):
+    error = E_NOT_LOGGED_IN
+
+class InvalidUserNameException(LightserverException):
+    error = E_INVALID_NAME
+
+class CurrentlySearchingException(LightserverException):
+    error = E_CURRENTLY_SEARCHING
+
+class NoSuchMacException(LightserverException):
+    error = E_NO_SUCH_MAC
+
+class InvalidPasswordException(LightserverException):
+    error = E_INVALID_PASSWORD
+
+class AuthNotEnabledException(LightserverException):
+    error = E_AUTH_NOT_ENABLED

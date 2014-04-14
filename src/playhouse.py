@@ -41,17 +41,55 @@ class BulbNotResetException(Exception):
     pass
 
 class HueAPIException(Exception):
-    def __init__(self, error):
+    def __init__(self, error, bridge):
         super().__init__("{}: {}".format(error["error"]["address"], error["error"]["description"]))
         self.address = error["error"]["address"]
         self.description = error["error"]["description"]
         self.type = error["error"]["type"]
+        self.bridge = bridge
 
 class UnauthorizedUserException(HueAPIException):
     pass
-
+class BodyContainsInvalidJSONException(HueAPIException):
+    pass
+class ResourceNotAvailableException(HueAPIException):
+    pass
+class MethodNotAvailableException(HueAPIException):
+    pass
+class MissingParameterException(HueAPIException):
+    pass
+class ParameterNotAvailableException(HueAPIException):
+    pass
+class InvalidValueException(HueAPIException):
+    pass
+class ReadOnlyParameterException(HueAPIException):
+    pass
 class NoLinkButtonPressedException(HueAPIException):
     pass
+class DeviceIsOffException(HueAPIException):
+    pass
+class CouldNotCreateGroupException(HueAPIException):
+    pass
+class CouldNotAddToGroupException(HueAPIException):
+    pass
+class InternalErrorException(HueAPIException):
+    pass
+
+HUE_ERRORS = {
+    1: UnauthorizedUserException,
+    2: BodyContainsInvalidJSONException,
+    3: ResourceNotAvailableException,
+    4: MethodNotAvailableException,
+    5: MissingParameterException,
+    6: ParameterNotAvailableException,
+    7: InvalidValueException,
+    8: ReadOnlyParameterException,
+    101: NoLinkButtonPressedException,
+    201: DeviceIsOffException,
+    301: CouldNotCreateGroupException,
+    302: CouldNotAddToGroupException,
+    901: InternalErrorException
+}
 
 class UnknownBridgeException(Exception):
     def __init__(self, mac):
@@ -76,10 +114,14 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
                 self.children[k] = tornado.gen.YieldFuture(v)
         assert all(isinstance(v, tornado.gen.YieldPoint) for v in self.children.values())
         self.unfinished_children = set(self.children)
+        self.exceptions = {}
 
     def start(self, runner):
-        for v in self.children.values():
-            v.start(runner)
+        for k, v in self.children.items():
+            try:
+                v.start(runner)
+            except Exception as e:
+                self.exceptions[k] = e
 
     def is_ready(self):
         finished = list(itertools.takewhile(
@@ -88,14 +130,13 @@ class ExceptionCatcher(tornado.gen.YieldPoint):
         return not self.unfinished_children
 
     def get_result(self):
-        exceptions = {}
         results = {}
         for k, v in self.children.items():
             try:
                 results[k] = v.get_result()
             except Exception as e: # pylint: disable=broad-except
-                exceptions[k] = e
-        return results, exceptions
+                self.exceptions[k] = e
+        return results, self.exceptions
 
 
 class TimeoutTask(tornado.gen.YieldPoint):
@@ -141,10 +182,10 @@ class TimeoutTask(tornado.gen.YieldPoint):
 class Bridge:
 
     # pylint: disable=too-many-instance-attributes
-    """ 
+    """
     Instances of the Bridge handle a connection to a specific Hue bridge.
-    
-    Hue bridges communicate through a RESTful JSON API through TCP port 80. 
+
+    Hue bridges communicate through a RESTful JSON API through TCP port 80.
     This class wraps this RESTful interface and provides a Python API for
     convenient Hue bridge operation. The function for setting the current
     state of a particular lamp uses the Hue light state names, check
@@ -156,7 +197,7 @@ class Bridge:
     def __new__(cls, ipaddress, username=None, defaults=None, timeout=2):
         """
         Create a new Bridge object.
-        
+
         Args:
             ipaddress - The IP address for this bridge
             username - Username as described in Hue documentation. Required for almost all commands.
@@ -206,17 +247,17 @@ class Bridge:
     def set_defaults(self, defaults):
         """
         Set the current "default" state changes. These changes are included whenever the state is set, unless overridden by the provided state change argument.
-        
+
         Args:
             defaults: The new default state chances, as a dictionary.
-        
+
         """
         self.defaults = defaults
 
     @tornado.gen.coroutine
     def http_request(self, method, url, body=None):
         """Send a HTTP request to the bridge.
-        
+
         Args:
             method - HTTP request method (POST/GET/PUT/DELETE)
             url - The URL to send this request to.
@@ -232,7 +273,7 @@ class Bridge:
     @tornado.gen.coroutine
     def send_raw(self, method, url, body=None):
         """Send a HTTP request to the bridge.
-        
+
         Args:
             method - HTTP request method (POST/GET/PUT/DELETE)
             url - The URL to send this request to.
@@ -240,6 +281,8 @@ class Bridge:
         """
         if body is not None:
             body = json.dumps(body)
+        elif method in ("POST", "PUT"): # the curl http client doesn't accept body=None for POST/PUT
+            body = ''
 
         res = yield self.http_request(method, url, body)
         if res is None:
@@ -247,21 +290,17 @@ class Bridge:
 
         res = tornado.escape.json_decode(res.body)
 
-        exceptions = {
-            1: UnauthorizedUserException,
-            101: NoLinkButtonPressedException
-        }
         if type(res) is list:
             for item in res:
                 if "error" in item:
-                    raise exceptions.get(item["error"]["type"], HueAPIException)(item)
+                    raise HUE_ERRORS.get(item["error"]["type"], HueAPIException)(item, self)
 
         return res
 
     @tornado.gen.coroutine
     def send_request(self, method, url, body=None, force_send=False):
-        """Send a HTTP request to the bridge. 
-        
+        """Send a HTTP request to the bridge.
+
         Args:
             method - HTTP request method (POST/GET/PUT/DELETE)
             url - The URL to send this request to. Unlike the other HTTP
@@ -271,7 +310,7 @@ class Bridge:
         username = self.username
         if username is None and not force_send:
             raise UnauthorizedUserException({"error": {"type": 1, "address": url,
-                                                       "description": "unauthorized user"}})
+                                                       "description": "unauthorized user"}}, self)
         elif username is None:
             username = "none" # dummy username guaranteed to be invalid (too short)
 
@@ -295,7 +334,7 @@ class Bridge:
     def set_state(self, i, **args):
         """
         Set state of a particular lamp.
-        
+
         Args:
             i: ID number for light
             args: Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
@@ -321,12 +360,12 @@ class Bridge:
     def set_group(self, i, **args):
         """
         Set state of a particular lamp group.
-        
+
         Args:
             i: ID number for group
             args: Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
         """
-    
+
         args = self._state_preprocess(args)
         keys = self.light_data.keys() if i == 0 else self.groups[i]
         for k, v in args.items():
@@ -398,7 +437,7 @@ class Bridge:
     def set_username(self, username):
         """
         Set the user name for this bridge. A valid user name is required to execute most commands.
-        
+
         Args:
             username - The new user name
         """
@@ -411,7 +450,7 @@ class Bridge:
         Create a new user for this bridge. A valid user name is required to execute most commands.
         In order to create a new user, the link button on the Hue bridge must pressed before this
         command is executed.
-        
+
         Arguments:
             devicetype - The 'type' of user. Should be related to the application for which this user is created.
             username - The new user name. Optional argument, a random user name will be generated by the bridge
@@ -427,7 +466,7 @@ class Bridge:
     @tornado.gen.coroutine
     def create_group(self, lights, name=None):
         """Create a new group for this bridge.
-        
+
         Args:
             lights: a list of lamp IDs (integers).
             name: Name for this group, optional argument.
@@ -444,7 +483,7 @@ class Bridge:
     @tornado.gen.coroutine
     def delete_group(self, i):
         """Delete a new group from this bridge.
-        
+
         Args:
             i: ID number for the group to be removed.
         """
@@ -526,7 +565,7 @@ class LightGrid:
     @tornado.gen.coroutine
     def add_bridge(self, ip_address_or_bridge, username=None):
         """Add a new bridge to this light grid
-        
+
         Args:
             ip_address_or_bridge: Can be either a Bridge object, or an IP address to the bridge, in which case a new Bridge object will be created.
             username: User name for this bridge. User names are required to perform most bridge commands.
@@ -548,7 +587,7 @@ class LightGrid:
     def has_bridge(self, mac_or_bridge):
         """
         Check if this light grid has a particular bridge stored in its configuration.
-        
+
         Args:
             mac_or_bridge: Either a MAC addressed for the requested bridge, or a Bridge object, in which case this method will search for a bridge with the same MAC address as the provided Bridge object.
         """
@@ -562,7 +601,7 @@ class LightGrid:
     def set_usernames(self, usernames):
         """
         Sets the user name map for this light grid.
-        
+
         Args:
             username: Map of serial number -> username pairs
         """
