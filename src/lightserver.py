@@ -141,6 +141,8 @@ def error_handler(func):
             self.write_json(errorcodes.E_BRIDGE_NOT_FOUND)
         except playhouse.NoLinkButtonPressedException:
             self.write_json(errorcodes.E_NO_LINKBUTTON)
+        except playhouse.BulbNotResetException:
+            self.write_json(errorcodes.E_BULB_NOT_RESET)
         except Exception as e: # should not happen
             self.write_json(errorcodes.E_INTERNAL_ERROR)
             logging.exception("Received an unexpected exception!")
@@ -153,6 +155,7 @@ class LightsHandler(BaseHandler):
     def post(self):
         data = self.read_json([{"x": int, "y": int, "?delay": float, "change": dict}])
         def handle_exceptions(exceptions):
+            # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
                 if type(e) is playhouse.NoBridgeAtCoordinateException:
                     logging.warning("No bridge added for (%s,%s)", x, y)
@@ -282,9 +285,11 @@ class BridgeLightsHandler(BaseHandler):
     @check_mac_exists
     def post(self, mac):
         data = self.read_json([{"light": int, "change": dict}])
-        for light in data:
-            yield GRID.bridges[mac].set_state(light['light'], **light['change'])
-
+        # TODO: partial error reporting?
+        _, errors = yield playhouse.ExceptionCatcher({
+            light['light']: GRID.bridges[mac].set_state(light['light'], **light['change'])
+            for light in data
+        })
         self.write_json({'state': 'success'})
 
 

@@ -23,6 +23,7 @@ E_NOT_LOGGED_IN = "user has not yet authenticated using /authenticate, " \
 E_INVALID_PASSWORD = "the supplied password was invalid"
 E_AUTH_NOT_ENABLED = "authentication is not enabled for this server instance"
 E_INVALID_NAME = "user name is too short or otherwise invalid"
+E_BULB_NOT_RESET = "failed to reset a bulb"
 
 
 class ErrorCodeDict(dict):
