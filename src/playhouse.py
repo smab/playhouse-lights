@@ -297,7 +297,6 @@ class Bridge:
 
         return res
 
-    @tornado.gen.coroutine
     def send_request(self, method, url, body=None, force_send=False):
         """Send a HTTP request to the bridge.
 
@@ -314,11 +313,10 @@ class Bridge:
         elif username is None:
             username = "none" # dummy username guaranteed to be invalid (too short)
 
-        return (yield self.send_raw(method, "/api/{}{}".format(username, url), body))
+        return self.send_raw(method, "/api/{}{}".format(username, url), body)
 
-    @tornado.gen.coroutine
     def _set_state(self, url, args):
-        return (yield self.send_request("PUT", url, body=args))
+        return self.send_request("PUT", url, body=args)
 
     def _state_preprocess(self, args):
         defs = self.defaults.copy()
@@ -330,7 +328,6 @@ class Bridge:
 
         return defs
 
-    @tornado.gen.coroutine
     def set_state(self, i, **args):
         """
         Set state of a particular lamp.
@@ -354,9 +351,8 @@ class Bridge:
         #print("Started with:" + str(args))
         #print("Reduced to:" + str(final_send))
 
-        return (yield self._set_state('/lights/{}/state'.format(i), final_send))
+        return self._set_state('/lights/{}/state'.format(i), final_send)
 
-    @tornado.gen.coroutine
     def set_group(self, i, **args):
         """
         Set state of a particular lamp group.
@@ -375,20 +371,17 @@ class Bridge:
                 for lamp in keys:
                     self.light_data[lamp][k] = v
 
-        return (yield self._set_state('/groups/{}/action'.format(i), args))
+        return self._set_state('/groups/{}/action'.format(i), args)
 
-    @tornado.gen.coroutine
     def get_lights(self):
-        return (yield self.send_request("GET", "/lights"))
+        return self.send_request("GET", "/lights")
 
-    @tornado.gen.coroutine
     def get_new_lights(self):
-        return (yield self.send_request("GET", "/lights/new"))
+        return self.send_request("GET", "/lights/new")
 
-    @tornado.gen.coroutine
     def search_lights(self):
         """Start a new light search"""
-        return (yield self.send_request("POST", "/lights"))
+        return self.send_request("POST", "/lights")
 
     @tornado.gen.coroutine
     def reset_nearby_bulb(self):
@@ -429,11 +422,9 @@ class Bridge:
             logging.debug("Closing stream used for bulb reset")
             stream.close()
 
-    @tornado.gen.coroutine
     def get_bridge_info(self):
-        return (yield self.send_request("GET", "/"))
+        return self.send_request("GET", "/")
 
-    @tornado.gen.coroutine
     def set_username(self, username):
         """
         Set the user name for this bridge. A valid user name is required to execute most commands.
@@ -442,7 +433,7 @@ class Bridge:
             username - The new user name
         """
         self.username = username
-        yield self.update_info()
+        return self.update_info()
 
     @tornado.gen.coroutine
     def create_user(self, devicetype, username=None):
