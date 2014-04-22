@@ -383,6 +383,9 @@ class Bridge:
         """Start a new light search"""
         return self.send_request("POST", "/lights")
 
+    def get_new_lights(self):
+        return self.send_request("GET", "/lights/new")
+
     @tornado.gen.coroutine
     def reset_nearby_bulb(self):
         sock = socket.socket()
