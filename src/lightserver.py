@@ -153,7 +153,7 @@ class LightsHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json([{"x": int, "y": int, "?delay": float, "change": dict}])
+        data = self.read_json([{"x": int, "y": int, "?delay": (int, float), "change": dict}])
         def handle_exceptions(exceptions):
             # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
