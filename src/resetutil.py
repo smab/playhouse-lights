@@ -106,7 +106,19 @@ def do_stuff():
     except Exception:
         traceback.print_exc()
     finally:
-        print(usernames)
+        print("Write down these MAC addresses and usernames for later use in the web-based "
+            "configuration system, or copy the newly created bridge_setup.json to "
+            "the lamp server's root directory.")
+        print("The usernames are vital in order for the lamp server "
+            "to be able to communicate with the bridges.")
+
+        print("{:<16}{}".format("MAC", "username"))
+        print("{:<16}{}".format("---", "--------"))
+        for mac, username in usernames.items():
+            print("{:<16}{}".format(mac, username))
+        with open("bridge_setup.json", 'w') as f:
+            json.dump({"usernames": usernames}, f)
+
         loop.stop()
 
 loop = tornado.ioloop.IOLoop.instance()
