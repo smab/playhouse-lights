@@ -52,7 +52,7 @@ def save_grid_changes():
 
     conf['grid'] = GRID.grid
     conf['ips'] = list(set(conf['ips']) | set(bridge.ipaddress for bridge in GRID.bridges.values()))
-    conf.update({ # 'update' in order to keep old usernames
+    conf['usernames'].update({ # 'update' in order to keep old usernames
         mac: bridge.username for mac, bridge in GRID.bridges.items() if bridge.logged_in
     })
 
