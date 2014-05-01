@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import sys
 import socket
@@ -32,8 +33,8 @@ def do_stuff():
                 bridge_map = dict()
                 print("Found bridges:")
                 for b in bridges:
-                    bridge_map[bridges.mac] = bridges
-                    print(bridges.mac)
+                    bridge_map[b.serial_number] = b
+                    print(b.serial_number)
                 while True:
                     mac = input("Enter the bridge MAC, or nothing to pick a manual IP address")
                     if mac == "":
