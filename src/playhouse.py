@@ -556,6 +556,8 @@ class LightGrid:
 
         self.set_grid(grid if grid is not None else [])
 
+        self.running = True
+
         if assert_reachable:
             self.assert_reachable()
 
