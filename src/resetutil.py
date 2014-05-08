@@ -11,78 +11,112 @@ import tornado.stack_context
 
 import playhouse
 
+def ask_for_y(s):
+    while True:
+        prompt = input(s)
+        if prompt[0] == "y":
+            break
+        if prompt[0] == "n":
+            loop.stop()
+            sys.exit()  
+            
+            
+@tornado.gen.coroutine
+def enter_manual_ip():
+    while True:
+        try:
+            ip = input("Enter manual IP address:")
+            bridge = yield playhouse.Bridge(ip)
+            print("Using bridge with MAC adress", bridge.serial_number)
+            break
+        except playhouse.NoBridgeFoundException:
+            print("No bridge found at given adress")      
+    return bridge
+
+@tornado.gen.coroutine
+def pick_bridge():
+    bridges = yield playhouse.discover()
+    
+    while True:
+        bridge_map = dict()
+        if len(bridges) != 0:
+            print("Found bridges:")
+            for b in bridges:
+                bridge_map[bridges.mac] = bridges
+                print(bridges.mac)
+            print("Enter the bridge MAC to pick a bridge")
+        else:
+            print("No bridges found")
+        print("Enter 'manual' to enter a manual IP address")
+        print("Enter 'search' to search for bridges again")
+        while True:
+            i = input(":")
+            if i == "search":
+                break
+            elif i=="manual":
+                return (yield enter_manual_ip())
+            else:               
+                bridge = bridge_map.get(i)
+                if bridge is None:
+                    print("No such bridge exists")
+                else:
+                    return bridge
+            
+    
+def create_user(bridge):
+    while True:
+        try:
+            input("Press bridge link button, so that a new user can be created, press enter afterwards:")
+            name = yield bridge.create_user("resetutil")
+            break
+        except playhouse.NoLinkButtonPressedException:
+            print("Failed to create user")
+            pass
+            
+def enter_num(s):
+    light_num = None
+    while light_num is None:
+        try:
+            light_num = int(input(s))
+            if light_num <= 0:
+                raise ValueError
+        except ValueError:
+            print("Invalid number, must be a positive integer")
+    return light_num
+
+@tornado.gen.coroutine    
+def reset_lamp():    
+    while True:
+        try:
+            input("Press enter to perform a reset attempt:")
+            yield bridge.reset_nearby_bulb()
+            break
+        except playhouse.BulbNotResetException:
+            print("Failed to reset a bulb, trying again...")
+    
 @tornado.gen.coroutine
 def do_stuff():
     usernames = {}
     try:
         while True:
             print("Make sure that the bridge is factory-reset")
-            while True:
-                prompt = input("Is it (y/n)?")
-                if prompt[0] == "y":
-                    break
-                if prompt[0] == "n":
-                    loop.stop()
-                    sys.exit()
+  
+            prompt = ask_for_y("Is it (y/n)?")
+                
             print("Beginning search for bridges")
             bridges = yield playhouse.discover()
 
-            bridge = None
-            if len(bridges) != 0:
-                bridge_map = dict()
-                print("Found bridges:")
-                for b in bridges:
-                    bridge_map[bridges.mac] = bridges
-                    print(bridges.mac)
-                while True:
-                    mac = input("Enter the bridge MAC, or nothing to pick a manual IP address")
-                    if mac == "":
-                        break
-                    bridge = bridge_map.get(mac)
-                    if bridge is None:
-                        print("Not a correct MAC address")
-                    else:
-                        break
-            else:
-                print("No bridges found")
-            if bridge is None:
-                while True:
-                    try:
-                        ip = input("Enter manual IP address:")
-                        bridge = yield playhouse.Bridge(ip)
-                        print("Using bridge with MAC adress", bridge.serial_number)
-                        break
-                    except playhouse.NoBridgeFoundException:
-                        print("No bridge found at given adress")
+            bridge = yield pick_bridge()
 
-            while True:
-                try:
-                    input("Press bridge link button, so that a new user can be created, press enter afterwards:")
-                    name = yield bridge.create_user("resetutil")
-                    break
-                except playhouse.NoLinkButtonPressedException:
-                    print("Failed to create user")
-                    pass
-            light_num = None
-            while light_num is None:
-                try:
-                    light_num = int(input("Enter the number of lights to add to bridge:"))
-                    if light_num <= 0:
-                        raise ValueError
-                except ValueError:
-                    print("Invalid number, must be a positive integer")
+            create_user()
+            
+            light_num = enter_num("Enter the number of lights to add to bridge:")
+
 
             print("Plug in each lamp one by one")
             for i in range(1, light_num + 1):
-                print("Preparing to reset lamp {}; make sure that only " \
-                    "one light is plugged in and that the bridge is close to the light.".format(i))
-                while True:
-                    try:
-                        input("Press enter to perform a reset attempt:")
-                        yield bridge.reset_nearby_bulb()
-                        break
-                    except playhouse.BulbNotResetException:
-                        print("Failed to reset a bulb, trying again...")
+                reset_lamp()
+                
             print("All bulbs reset")
             input("Plug in all {} reset lamps and press enter:".format(light_num))
             yield bridge.search_lights()
