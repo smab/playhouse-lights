@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import sys
 import socket
@@ -35,9 +36,10 @@ def enter_manual_ip():
 
 @tornado.gen.coroutine
 def pick_bridge():
-    bridges = yield playhouse.discover()
-    
+       
     while True:
+        print("Beginning search for bridges")
+        bridges = yield playhouse.discover()
         bridge_map = dict()
         if len(bridges) != 0:
             print("Found bridges:")
@@ -103,14 +105,12 @@ def do_stuff():
   
             prompt = ask_for_y("Is it (y/n)?")
                 
-            print("Beginning search for bridges")
-            bridges = yield playhouse.discover()
-
             bridge = yield pick_bridge()
 
             create_user()
             
             light_num = enter_num("Enter the number of lights to add to bridge:")
+
 
 
             print("Plug in each lamp one by one")

@@ -255,7 +255,7 @@ class Bridge:
         self.defaults = defaults
 
     @tornado.gen.coroutine
-    def http_request(self, method, url, body=None):
+    def http_request(self, method, url, body=None, timeout=None):
         """Send a HTTP request to the bridge.
 
         Args:
@@ -265,13 +265,15 @@ class Bridge:
         """
         logging.debug("Sending request %s %s (data: %s) to %s",
                       method, url, body, self.ipaddress)
+        if timeout is None:
+            timeout = self.timeout
         response = yield self.client.fetch("http://{}{}".format(self.ipaddress, url),
-                                           method=method, body=body, request_timeout=self.timeout)
+                                           method=method, body=body, request_timeout=timeout)
         logging.debug("Response from bridge: %s", response)
         return response
 
     @tornado.gen.coroutine
-    def send_raw(self, method, url, body=None):
+    def send_raw(self, method, url, body=None, timeout=None):
         """Send a HTTP request to the bridge.
 
         Args:
@@ -284,7 +286,7 @@ class Bridge:
         elif method in ("POST", "PUT"): # the curl http client doesn't accept body=None for POST/PUT
             body = ''
 
-        res = yield self.http_request(method, url, body)
+        res = yield self.http_request(method, url, body, timeout)
         if res is None:
             return
 
@@ -297,7 +299,7 @@ class Bridge:
 
         return res
 
-    def send_request(self, method, url, body=None, force_send=False):
+    def send_request(self, method, url, body=None, timeout=None, force_send=False):
         """Send a HTTP request to the bridge.
 
         Args:
@@ -313,7 +315,7 @@ class Bridge:
         elif username is None:
             username = "none" # dummy username guaranteed to be invalid (too short)
 
-        return self.send_raw(method, "/api/{}{}".format(username, url), body)
+        return self.send_raw(method, "/api/{}{}".format(username, url), body, timeout)
 
     def _set_state(self, url, args):
         return self.send_request("PUT", url, body=args)
@@ -400,7 +402,7 @@ class Bridge:
             logging.debug("Got %s as an echo response", echo)
 
             if echo != b'[Link,Touchlink]\n':
-                logging.debug("Echo response was not [Link,Touchlink]")
+                logging.debug("Echo response was not [Link,Touchlink]: '%s'", echo.strip())
                 raise BulbNotResetException
 
             response = (yield TimeoutTask(stream.read_until, b'\n', timeout=10)).decode()
@@ -525,7 +527,8 @@ class Bridge:
 
 
 class LightGrid:
-    def __init__(self, usernames=None, grid=None, buffered=False, defaults=None):
+    def __init__(self, usernames=None, grid=None, buffered=False, defaults=None,
+                 assert_reachable=True):
         """Create a new light grid-
 
         Args:
@@ -538,6 +541,8 @@ class LightGrid:
                 changes, run commit.
             defaults: Additional instructions to include in each state change
                 request to a bridge.
+            assert_reachable: If true, the grid will occasionally check that all
+                bridges are reachable; any unreachable bridge will be removed.
         """
         self.defaults = defaults if defaults is not None else {}
         self.bridges = {}
@@ -549,12 +554,12 @@ class LightGrid:
         self.height = 0
         self.width = 0
 
-        #for ip in ip_addresses:
-        #    bridge = Bridge(ip, defaults=defaults)
-        #    self.bridges[bridge.serial_number] = bridge
-        #    if bridge.serial_number in usernames:
-        #        bridge.set_username(usernames[bridge.serial_number])
         self.set_grid(grid if grid is not None else [])
+
+        self.running = True
+
+        if assert_reachable:
+            self.assert_reachable()
 
     @tornado.gen.coroutine
     def add_bridge(self, ip_address_or_bridge, username=None):
@@ -602,11 +607,6 @@ class LightGrid:
         self.usernames = usernames
 
     def set_grid(self, grid):
-        #for row in grid:
-        #    for (mac, lamp) in row:
-        #        pass
-        #        if mac not in self.bridges:
-        #            raise UnknownBridgeException
         self.grid = grid
         self.height = len(self.grid)
         self.width = max(len(x) for x in self.grid) if self.height > 0 else 0
@@ -667,6 +667,54 @@ class LightGrid:
         logging.debug("Got results %s", res)
         logging.debug("Got exceptions %s", exceptions)
         return exceptions
+
+    @tornado.gen.coroutine
+    def assert_reachable(self):
+        strikes = collections.defaultdict(int)
+
+        while self.running:
+            try:
+                yield tornado.gen.Task(tornado.ioloop.IOLoop.current().add_timeout,
+                                       datetime.timedelta(seconds=20))
+
+                macs_to_remove = set()
+                for mac, bridge in self.bridges.items():
+                    logging.debug("Pinging bridge %s at %s",
+                                  mac, bridge.ipaddress)
+                    try:
+                        res = yield bridge.send_request("GET", "/config",
+                                                        timeout=5, force_send=True)
+                        if res['name'] != 'Philips hue':
+                            raise ValueError
+                        strikes[bridge.ipaddress] = 0
+                    except (ValueError, TypeError, KeyError,
+                            UnicodeError, tornado.httpclient.HTTPError):
+                        strikes[bridge.ipaddress] += 1
+                        logging.error("Couldn't reach bridge at %s; strikes: %s/3",
+                                      bridge.ipaddress, strikes[bridge.ipaddress])
+
+                        if strikes[bridge.ipaddress] >= 3:
+                            macs_to_remove.add(mac)
+                            del strikes[bridge.ipaddress]
+
+                for mac in macs_to_remove:
+                    logging.error("Removing bridge %s at %s", mac, bridge.ipaddress)
+                    del self.bridges[mac]
+
+                if len(macs_to_remove) > 0:
+                    logging.info("Attempting to find lost bridges")
+                    new_bridges = yield discover()
+                    logging.info("Found bridges: %s", {b.serial_number: b.ipaddress
+                                                       for b in new_bridges})
+
+                    for bridge in new_bridges:
+                        if bridge.serial_number in macs_to_remove:
+                            logging.info("Re-adding %s at %s",
+                                         bridge.serial_number, bridge.ipaddress)
+                            self.add_bridge(bridge)
+
+            except Exception:
+                logging.exception("Encountered exception while pinging bridges")
 
 
 class AsyncSocket(socket.socket):

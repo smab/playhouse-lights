@@ -56,6 +56,9 @@ def save_grid_changes():
         mac: bridge.username for mac, bridge in GRID.bridges.items() if bridge.logged_in
     })
 
+    # NOTE: this is the only place where the grid's usernames dict is updated
+    GRID.set_usernames(conf['usernames'])
+
     json_data = tornado.escape.json_encode(conf)
     with open(BRIDGE_CONFIG_FILE, 'w') as f:
         f.write(json_data)
