@@ -1,3 +1,10 @@
+"""A `Tornado <http://www.tornadoweb.org/>`_-based Python library for communicating
+with Philips Hue bridges.
+
+This library exposes the Philips Hue API, normally a JSON API, as an object oriented Python API.
+These methods require that the `IOLoop <tornado.ioloop.IOLoop>` returned by `tornado.ioloop.IOLoop.current`
+is running in order to function.
+"""
 
 import collections
 import datetime
@@ -182,29 +189,30 @@ class TimeoutTask(tornado.gen.YieldPoint):
 class Bridge:
 
     # pylint: disable=too-many-instance-attributes
-    """
-    Instances of the Bridge handle a connection to a specific Hue bridge.
+    """Instances of the Bridge handle a connection to a specific Hue bridge.
 
     Hue bridges communicate through a RESTful JSON API through TCP port 80.
     This class wraps this RESTful interface and provides a Python API for
-    convenient Hue bridge operation. The function for setting the current
-    state of a particular lamp uses the Hue light state names, check
+    convenient Hue bridge operation. The functions for setting the current
+    state of a particular lamp uses the Hue light state names, see
     http://developers.meethue.com/1_lightsapi.html#16_set_light_state for reference.
     """
     ignoredkeys = {"transitiontime", "alert", "effect", "colormode", "reachable"}
 
     @tornado.gen.coroutine
     def __new__(cls, ipaddress, username=None, defaults=None, timeout=2):
-        """
-        Create a new Bridge object.
+        """Create a new Bridge object.
 
-        Args:
-            ipaddress - The IP address for this bridge
-            username - Username as described in Hue documentation. Required for almost all commands.
-            defaults - A dictionary of "default" state changes. These changes are included whenever the state is set, unless overridden by the provided state change argument.
-            timeout - Time until a HTTP request times out, in seconds.
+        :param str ipaddress: The IP address for this bridge
+        :param str username: The username for this bridge as described in the Hue documentation.
+                             Required for most commands.
+        :param dict defaults: A dictionary containing default state changes to be sent with any
+                              state-changing commands.
+        :param int timeout: The time in seconds to wait for any requests to the Hue bridge
+                            to complete.
+        :return: A `tornado.concurrent.Future` that resolves to a bridge object when completed.
+        :raises NoBridgeFoundException: If no bridge was found at the given IP address.
         """
-        #bridge = cls(ipaddress, username, defaults, timeout)
         self = super(Bridge, cls).__new__(cls)
 
         self.defaults = defaults if defaults is not None else {"transitiontime": 0}
@@ -241,27 +249,29 @@ class Bridge:
 
         return self
 
-    def __init__(self):
-        pass
-
     def set_defaults(self, defaults):
-        """
-        Set the current "default" state changes. These changes are included whenever the state is set, unless overridden by the provided state change argument.
+        """Set the default state changes to be included with any calls to state-changing operations.
 
-        Args:
-            defaults: The new default state chances, as a dictionary.
+        These changes are included whenever the state is set, unless overridden
+        by the provided state change argument.
 
+        :param dict defaults: The new default state changes.
         """
         self.defaults = defaults
 
     @tornado.gen.coroutine
     def http_request(self, method, url, body=None, timeout=None):
-        """Send a HTTP request to the bridge.
+        """Send an HTTP request to the bridge.
 
-        Args:
-            method - HTTP request method (POST/GET/PUT/DELETE)
-            url - The URL to send this request to.
-            body - HTTP POST request body, as a string.
+        :param str method: HTTP request method (POST/GET/PUT/DELETE)
+        :param str url: The URL to send this request to.
+        :param str body: HTTP POST request body.
+        :param int timeout: The time to wait for this request to complete. Defaults to
+                            the timeout supplied to the `Bridge` constructor.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge
+                 when complete.
+        :rtype: str
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
         """
         logging.debug("Sending request %s %s (data: %s) to %s",
                       method, url, body, self.ipaddress)
@@ -274,12 +284,19 @@ class Bridge:
 
     @tornado.gen.coroutine
     def send_raw(self, method, url, body=None, timeout=None):
-        """Send a HTTP request to the bridge.
+        """Send an HTTP request to the bridge.
 
-        Args:
-            method - HTTP request method (POST/GET/PUT/DELETE)
-            url - The URL to send this request to.
-            body - HTTP POST request body, as a Python dictionary. This object will be converted to JSON.
+        :param str method: HTTP request method (POST/GET/PUT/DELETE).
+        :param str url: The URL to send this request to.
+        :param dict body: HTTP POST request body as a Python dictionary. The dictionary
+                          will be converted to a JSON string.
+        :param int timeout: The time to wait for this request to complete. Defaults to
+                            the timeout supplied to the `Bridge` constructor.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         if body is not None:
             body = json.dumps(body)
@@ -302,11 +319,24 @@ class Bridge:
     def send_request(self, method, url, body=None, timeout=None, force_send=False):
         """Send a HTTP request to the bridge.
 
-        Args:
-            method - HTTP request method (POST/GET/PUT/DELETE)
-            url - The URL to send this request to. Unlike the other HTTP
-            request methods, this argument should only include the part of the URL which is after the username.
-            body - HTTP POST request body, as a Python dictionary. This object will be converted to JSON.
+        :param str method: HTTP request method (POST/GET/PUT/DELETE).
+        :param str url: The URL to send this request to. Unlike the other HTTP request
+                        methods, this argument should only include the part of the URL
+                        which is after the username.
+        :param dict body: HTTP POST request body as a Python dictionary. The dictionary
+                          will be converted to a JSON string.
+        :param int timeout: The time to wait for this request to complete. Defaults to
+                            the timeout supplied to the `Bridge` constructor.
+        :param bool force_send: By default no request will be attempted and an
+                                `UnauthorizedUserException` if no username is set; setting
+                                this parameter to ``True`` will force a request using
+                                a dummy username ('none').
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
+
         """
         username = self.username
         if username is None and not force_send:
@@ -331,12 +361,16 @@ class Bridge:
         return defs
 
     def set_state(self, i, **args):
-        """
-        Set state of a particular lamp.
+        """Set state of a particular lamp.
 
-        Args:
-            i: ID number for light
-            args: Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        :param int i: ID number for the light whose state to change.
+        :param args: Hue state changes. A full list of allowed state change can be found at
+                     http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         args = self._state_preprocess(args)
 
@@ -356,12 +390,16 @@ class Bridge:
         return self._set_state('/lights/{}/state'.format(i), final_send)
 
     def set_group(self, i, **args):
-        """
-        Set state of a particular lamp group.
+        """Set the state of a given lamp group.
 
-        Args:
-            i: ID number for group
-            args: Hue state changes. A full list of allowed state change can be found in http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        :param int i: ID for the group whose state to change.
+        :param args: Hue state changes. A full list of allowed state changes can be found at
+                     http://developers.meethue.com/1_lightsapi.html#16_set_light_state.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
 
         args = self._state_preprocess(args)
@@ -376,20 +414,49 @@ class Bridge:
         return self._set_state('/groups/{}/action'.format(i), args)
 
     def get_lights(self):
+        """Fetch a list of all lights known to the bridge.
+
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
+        """
         return self.send_request("GET", "/lights")
 
-    def get_new_lights(self):
-        return self.send_request("GET", "/lights/new")
-
     def search_lights(self):
-        """Start a new light search"""
+        """Start a new light search.
+
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
+        """
         return self.send_request("POST", "/lights")
 
     def get_new_lights(self):
+        """Get a list of all lights found during the last light search.
+
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
+        """
         return self.send_request("GET", "/lights/new")
 
     @tornado.gen.coroutine
     def reset_nearby_bulb(self):
+        """Attempts to reset a Hue light bulb in proximity to the bridge.
+
+        For best effect, place the bulb in close proximity to the bridge, and make
+        sure that there are no other turned on Hue lights nearby.
+
+        :return: A `tornado.concurrent.Future` that completes when a bulb has been successfully
+                 reset, or when the reset attempt has failed.
+        :raises BulbNotResetException: If no bulb was reset.
+        """
         sock = socket.socket()
         stream = tornado.iostream.IOStream(sock)
         try:
@@ -428,29 +495,48 @@ class Bridge:
             stream.close()
 
     def get_bridge_info(self):
+        """TODO
+
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
+        """
         return self.send_request("GET", "/")
 
     def set_username(self, username):
-        """
-        Set the user name for this bridge. A valid user name is required to execute most commands.
+        """Set the user name for this bridge.
 
-        Args:
-            username - The new user name
+        A valid user name is required to execute most commands.
+
+        `update_info` will be run after setting the username in order to validate the username.
+
+        :param str username: The new user name.
+        :return: A `tornado.concurrent.Future` that completes when `update_info` has finished
+                 updating the metadata.
+        :raises NoLinkButtonPressedException: If the link button was not pressed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         self.username = username
         return self.update_info()
 
     @tornado.gen.coroutine
     def create_user(self, devicetype, username=None):
-        """
-        Create a new user for this bridge. A valid user name is required to execute most commands.
-        In order to create a new user, the link button on the Hue bridge must pressed before this
-        command is executed.
+        """Create a new user for this bridge.
 
-        Arguments:
-            devicetype - The 'type' of user. Should be related to the application for which this user is created.
-            username - The new user name. Optional argument, a random user name will be generated by the bridge
-        if a user name is not provided.
+        A valid user name is required to execute most commands. In order to create a new user,
+        the link button on the Hue bridge must pressed before this command is executed.
+
+        :param str devicetype: The 'type' of user. Should be related to the application
+                               for which this user is created.
+        :param str username: The new user name. If not supplied a random user name will
+                             be generated by the bridge.
+        :return: A `tornado.concurrent.Future` that resolves to the new username when complete.
+        :rtype: str
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises NoLinkButtonPressedException: If the link button was not pressed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         body = {'devicetype': devicetype}
         if username is not None:
@@ -463,9 +549,13 @@ class Bridge:
     def create_group(self, lights, name=None):
         """Create a new group for this bridge.
 
-        Args:
-            lights: a list of lamp IDs (integers).
-            name: Name for this group, optional argument.
+        :param list lights: a list of lamp IDs (`int`).
+        :param str name: Name for this group, optional argument.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         body = {'lights':[str(x) for x in lights]}
         if name is not None:
@@ -480,8 +570,12 @@ class Bridge:
     def delete_group(self, i):
         """Delete a new group from this bridge.
 
-        Args:
-            i: ID number for the group to be removed.
+        :param int i: ID number for the group to be removed.
+        :return: A `tornado.concurrent.Future` that resolves to the response from the bridge,
+                 converted from JSON to a Python dictionary, when complete.
+        :rtype: dict
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        :raises HueAPIException: If the Hue API returned an error.
         """
         res = (yield self.send_request("DELETE", "/groups/{}".format(i)))[0]
         del self.groups[i]
@@ -489,8 +583,15 @@ class Bridge:
 
     @tornado.gen.coroutine
     def update_info(self):
-        """Update the Hue bridge metadata."""
-        #print("Update " + str(self.username))
+        """Update the Hue bridge metadata.
+
+        If the current `username` is valid, `logged_in` will be set to `True` and
+        `gateway`, `netmask`, `name` and `mac` will be updated; otherwise, `logged_in`
+        will be set to `False` and the remaining attributes to `None`.
+
+        :return: A `tornado.concurrent.Future` that completes when the update attempt completes.
+        :raises tornado.httpclient.HTTPError: If the HTTP request failed.
+        """
         try:
             data = yield self.send_request("GET", "/")
             info = data["config"]
@@ -513,8 +614,6 @@ class Bridge:
             for group_num, group in data["groups"].items():
                 lights = group["lights"]
                 self.groups[int(group_num)] = [int(x) for x in lights]
-            #print(self.light_data)
-            #print(self.groups)
         except UnauthorizedUserException:
             if self.username is not None:
                 logging.warning("Couldn't send request to %s using username %s",

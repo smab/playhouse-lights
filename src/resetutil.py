@@ -19,9 +19,9 @@ def ask_for_y(s):
             break
         if prompt[0] == "n":
             loop.stop()
-            sys.exit()  
-            
-            
+            sys.exit()
+
+
 @tornado.gen.coroutine
 def enter_manual_ip():
     while True:
@@ -31,12 +31,12 @@ def enter_manual_ip():
             print("Using bridge with MAC adress", bridge.serial_number)
             break
         except playhouse.NoBridgeFoundException:
-            print("No bridge found at given adress")      
+            print("No bridge found at given adress")
     return bridge
 
 @tornado.gen.coroutine
 def pick_bridge():
-       
+
     while True:
         print("Beginning search for bridges")
         bridges = yield playhouse.discover()
@@ -57,14 +57,14 @@ def pick_bridge():
                 break
             elif i=="manual":
                 return (yield enter_manual_ip())
-            else:               
+            else:
                 bridge = bridge_map.get(i)
                 if bridge is None:
                     print("No such bridge exists")
                 else:
                     return bridge
-            
-    
+
+
 def create_user(bridge):
     while True:
         try:
@@ -74,7 +74,7 @@ def create_user(bridge):
         except playhouse.NoLinkButtonPressedException:
             print("Failed to create user")
             pass
-            
+
 def enter_num(s):
     light_num = None
     while light_num is None:
@@ -86,8 +86,8 @@ def enter_num(s):
             print("Invalid number, must be a positive integer")
     return light_num
 
-@tornado.gen.coroutine    
-def reset_lamp():    
+@tornado.gen.coroutine
+def reset_lamp():
     while True:
         try:
             input("Press enter to perform a reset attempt:")
@@ -95,20 +95,20 @@ def reset_lamp():
             break
         except playhouse.BulbNotResetException:
             print("Failed to reset a bulb, trying again...")
-    
+
 @tornado.gen.coroutine
 def do_stuff():
     usernames = {}
     try:
         while True:
             print("Make sure that the bridge is factory-reset")
-  
+
             prompt = ask_for_y("Is it (y/n)?")
-                
+
             bridge = yield pick_bridge()
 
             create_user()
-            
+
             light_num = enter_num("Enter the number of lights to add to bridge:")
 
 
@@ -116,7 +116,7 @@ def do_stuff():
             print("Plug in each lamp one by one")
             for i in range(1, light_num + 1):
                 reset_lamp()
-                
+
             print("All bulbs reset")
             input("Plug in all {} reset lamps and press enter:".format(light_num))
             yield bridge.search_lights()
@@ -155,6 +155,7 @@ def do_stuff():
 
         loop.stop()
 
-loop = tornado.ioloop.IOLoop.instance()
-loop.add_callback(do_stuff)
-loop.start()
+if __name__ == '__main__':
+    loop = tornado.ioloop.IOLoop.instance()
+    loop.add_callback(do_stuff)
+    loop.start()
