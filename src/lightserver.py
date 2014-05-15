@@ -509,9 +509,6 @@ def init_lightgrid():
         with open(BRIDGE_CONFIG_FILE, 'r') as f:
             bridge_config.update(tornado.escape.json_decode(f.read()))
             logging.debug("Configuration was %s", bridge_config)
-
-            bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
-            logging.debug("Constructed grid %s", bridge_config["grid"])
     except (FileNotFoundError, ValueError):
         logging.warning("%s not found or contained invalid JSON, using empty grid",
                         BRIDGE_CONFIG_FILE)
@@ -586,9 +583,10 @@ def init_http():
     http_server.listen(CONFIG['port'])
 
 if __name__ == "__main__":
-    init_lightgrid() # will run when IO loop has started
+    loop = tornado.ioloop.IOLoop.current()
+    loop.run_sync(init_lightgrid)
 
     init_http()
 
     logging.info("Server now listening at port %s", CONFIG['port'])
-    tornado.ioloop.IOLoop.instance().start()
+    loop.start()
