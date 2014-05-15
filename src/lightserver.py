@@ -160,10 +160,10 @@ class LightsHandler(BaseHandler):
         def handle_exceptions(exceptions):
             # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
-                if type(e) is playhouse.NoBridgeAtCoordinateException:
+                if isinstance(e, playhouse.NoBridgeAtCoordinateException):
                     logging.warning("No bridge added for (%s,%s)", x, y)
                     logging.debug("", exc_info=(type(e), e, e.__traceback__))
-                elif type(e) is playhouse.OutsideGridException:
+                elif isinstance(e, playhouse.OutsideGridException):
                     logging.warning("(%s,%s) is outside grid bounds", x, y)
                     logging.debug("", exc_info=(type(e), e, e.__traceback__))
                 else:
