@@ -20,6 +20,7 @@ Requirements:
 * Tornado 3.2+
 * PycURL 7.19.3+
 * libcurl 7.21.1+
+* jsonschema 2.3.0+
 
 Setup:
 ------------------------

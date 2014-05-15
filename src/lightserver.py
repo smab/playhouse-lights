@@ -19,6 +19,8 @@ import tornado.httpserver
 import tornado.ioloop
 import tornado.web
 
+import jsonschema
+
 import errorcodes
 import playhouse
 
@@ -69,45 +71,26 @@ class BaseHandler(tornado.web.RequestHandler):
     def get_current_user(self):
         return self.get_secure_cookie("user")
 
-    def read_json(self, jformat=None):
-        def is_valid(data, schema):
-            logging.debug("Testing %s vs %s", repr(data), schema)
-            if type(schema) is dict:
-                # handle optional keys (?-prefixed)
-                all_keys = set(x[1:] if x[0] == '?' else x for x in schema)
-                required_keys = set(x for x in schema if x[0] != '?')
-                schema = {k[1:] if k[0] == '?' else k: v for k, v in schema.items()}
-            # don't even ask
-            valid_format = (type(schema) is list and len(schema) == 1 and type(data) is list and
-                                all(is_valid(d, schema[0]) for d in data)) or \
-                           (type(schema) is list and len(schema) > 1 and type(data) is list and
-                                len(data) == len(schema) and
-                                all(is_valid(a, b) for a, b in zip(data, schema))) or \
-                           (type(schema) is dict and type(data) is dict and
-                                data.keys() <= all_keys and data.keys() >= required_keys and
-                                all(is_valid(data[k], schema[k]) for k in data)) or \
-                           (type(schema) is tuple and any(is_valid(data, a) for a in schema)) or \
-                           (type(schema) is type and type(data) is schema)
-            if valid_format:
-                logging.debug("%s vs %s was valid", repr(data), schema)
-            else:
-                logging.debug("%s vs %s was invalid", repr(data), schema)
-            return valid_format
-
+    def read_json(self, schema=None):
         try:
+            logging.debug("Request is %s", self.request.body)
             data = tornado.escape.json_decode(self.request.body)
             logging.debug("Parsed JSON %s", data)
 
-            if jformat is None or is_valid(data, jformat):
-                return data
-            else:
-                logging.debug("JSON was in an invalid format")
-                raise errorcodes.RequestInvalidFormatException
-
+            if schema is not None:
+                validator = jsonschema.Draft4Validator(
+                    schema, types={"nullablestring": (str, type(None)),
+                                   "nullableobject": (dict, type(None))})
+                validator.validate(data)
+            return data
         except UnicodeDecodeError:
             raise errorcodes.RequestInvalidUnicodeException
         except ValueError:
+            logging.debug("Unable to parse JSON")
             raise errorcodes.RequestInvalidJSONException
+        except jsonschema.ValidationError:
+            logging.debug("JSON was in an invalid format")
+            raise errorcodes.RequestInvalidFormatException
 
     def write_json(self, data):
         self.set_header("Content-Type", "application/json")
@@ -156,7 +139,20 @@ class LightsHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json([{"x": int, "y": int, "?delay": (int, float), "change": dict}])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "delay": { "type": "number" },
+                    "change": { "type": "object" }
+                },
+                "required": ["x", "y", "change"]
+            }
+        })
+
         def handle_exceptions(exceptions):
             # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
@@ -193,7 +189,7 @@ class LightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json(dict)
+        data = self.read_json({"type": "object"})
         yield GRID.set_all(**data)
         yield GRID.commit()
         self.write_json({"state": "success"})
@@ -225,7 +221,14 @@ class BridgesAddHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json({"ip": str, "?username": (str, type(None))})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "ip": { "type": "string" },
+                "username": { "type": "nullablestring" }
+            },
+            "required": ["ip"]
+        })
 
         username = data.get("username", None)
         bridge = yield GRID.add_bridge(data['ip'], username)
@@ -266,7 +269,14 @@ class BridgesMacHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json({"username": (str, type(None))})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "username": { "type": "nullablestring" }
+            },
+            "required": ["username"]
+        })
+
         yield GRID.bridges[mac].set_username(data['username'])
         save_grid_changes()
         self.write_json({"state": "success", "username": data['username'],
@@ -287,7 +297,18 @@ class BridgeLightsHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json([{"light": int, "change": dict}])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "light": { "type": "integer" },
+                    "change": { "type": "object" }
+                },
+                "required": ["light", "change"]
+            }
+        })
+
         # TODO: partial error reporting?
         _, errors = yield playhouse.ExceptionCatcher({
             light['light']: GRID.bridges[mac].set_state(light['light'], **light['change'])
@@ -302,7 +323,7 @@ class BridgeLightsAllHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json(dict)
+        data = self.read_json({"type": "object"})
         yield GRID.bridges[mac].set_group(0, **data)
 
         self.write_json({'state': 'success'})
@@ -332,7 +353,12 @@ class BridgeAddUserHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json({"?username": str})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "username": { "type": "string" }
+            }
+        })
         username = data.get("username", None)
 
         bridge = GRID.bridges[mac]
@@ -353,7 +379,13 @@ class BridgesSearchHandler(BaseHandler):
     @error_handler
     @authenticated
     def post(self):
-        data = self.read_json({"auto_add": bool})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "auto_add": { "type": "boolean" }
+            },
+            "required": ["auto_add"]
+        })
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
 
@@ -409,7 +441,21 @@ class GridHandler(BaseHandler):
     @error_handler
     @authenticated
     def post(self):
-        data = self.read_json([[({"mac": str, "lamp": int}, type(None))]])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "nullableobject",
+                    "properties": {
+                        "mac": { "type": "string" },
+                        "lamp": { "type": "integer" }
+                    },
+                    "required": ["mac", "lamp"]
+                }
+            }
+        })
+
         g = [[(lamp['mac'], lamp['lamp']) if lamp is not None else None
               for lamp in row]
              for row in data]
@@ -483,7 +529,15 @@ function send_post(){
 class AuthenticateHandler(BaseHandler):
     @error_handler
     def post(self):
-        data = self.read_json({"password": str, "username": str})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "password": { "type": "string" },
+                "username": { "type": "string" }
+            },
+            "required": ["password", "username"]
+        })
+
         if CONFIG['require_password']:
             if data['password'] == CONFIG['password']:
                 self.set_secure_cookie('user', data['username'])
