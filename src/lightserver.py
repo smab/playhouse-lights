@@ -37,6 +37,7 @@ CONFIG = {
     "port": 4711,
     "require_password": False,
     "password": None,
+    "validate_state_changes": True,
     "ssl": False
 }
 
@@ -90,7 +91,7 @@ class BaseHandler(tornado.web.RequestHandler):
             raise errorcodes.RequestInvalidJSONException
         except jsonschema.ValidationError:
             logging.debug("JSON was in an invalid format")
-            raise errorcodes.RequestInvalidFormatException
+            raise
 
 
 def authenticated(func):
@@ -112,6 +113,8 @@ def error_handler(func):
                 yield result
         except errorcodes.LightserverException as e:
             self.write(e.error)
+        except jsonschema.ValidationError as e:
+            self.write(errorcodes.E_INVALID_FORMAT.merge(format_error=e.message))
         except playhouse.UnauthorizedUserException as e:
             self.write(errorcodes.E_INVALID_USERNAME.format(
                 mac=e.bridge.serial_number, username=e.bridge.username).merge(
@@ -129,6 +132,64 @@ def error_handler(func):
             logging.exception("Received an unexpected exception!")
     return new_func
 
+
+_CHANGE_SPECIFICATION = {
+    "type": "object",
+    "properties": {
+        "on": { "type": "boolean" },
+        "bri": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+        },
+        "hue": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+        },
+        "sat": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+        },
+        "xy": {
+            "type": "array",
+            "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+            },
+            "maxItems": 2,
+            "minItems": 2
+        },
+        "ct": {
+            "type": "integer",
+            "minimum": 153,
+            "maximum": 500
+        },
+        "rgb": {
+            "type": "array",
+            "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+            },
+            "maxItems": 3,
+            "minItems": 3
+        },
+        "alert": {
+            "enum": ["none", "select", "lselect"]
+        },
+        "effect": {
+            "enum": ["none", "colorloop"]
+        },
+        "transitiontime": {
+            "type": "integer",
+            "minimum": 0
+        }
+    }
+}
+
 class LightsHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
@@ -142,7 +203,7 @@ class LightsHandler(BaseHandler):
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
                     "delay": { "type": "number" },
-                    "change": { "type": "object" }
+                    "change": _CHANGE_SPECIFICATION
                 },
                 "required": ["x", "y", "change"]
             }
@@ -184,7 +245,7 @@ class LightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json({"type": "object"})
+        data = self.read_json(_CHANGE_SPECIFICATION)
         yield GRID.set_all(**data)
         yield GRID.commit()
         self.write({"state": "success"})
@@ -298,7 +359,7 @@ class BridgeLightsHandler(BaseHandler):
                 "type": "object",
                 "properties": {
                     "light": { "type": "integer" },
-                    "change": { "type": "object" }
+                    "change": _CHANGE_SPECIFICATION
                 },
                 "required": ["light", "change"]
             }
@@ -318,7 +379,7 @@ class BridgeLightsAllHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json({"type": "object"})
+        data = self.read_json(_CHANGE_SPECIFICATION)
         yield GRID.bridges[mac].set_group(0, **data)
 
         self.write({'state': 'success'})
@@ -613,6 +674,10 @@ def init_http():
     except (FileNotFoundError, ValueError):
         logging.warning("%s not found or contained invalid JSON, " \
                         "using default configuration values: %s", CONFIG_FILE, CONFIG)
+
+    if not CONFIG['validate_state_changes']:
+        _CHANGE_SPECIFICATION.clear()
+        _CHANGE_SPECIFICATION['type'] = 'object'
 
     if CONFIG['require_password']:
         logging.info("This instance will require authentication")
