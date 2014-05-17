@@ -92,11 +92,6 @@ class BaseHandler(tornado.web.RequestHandler):
             logging.debug("JSON was in an invalid format")
             raise errorcodes.RequestInvalidFormatException
 
-    def write_json(self, data):
-        self.set_header("Content-Type", "application/json")
-        logging.debug("Sent response %s", data)
-        self.write(tornado.escape.json_encode(data))
-
 
 def authenticated(func):
     @functools.wraps(func)
@@ -116,21 +111,21 @@ def error_handler(func):
             if isinstance(result, tornado.concurrent.Future):
                 yield result
         except errorcodes.LightserverException as e:
-            self.write_json(e.error)
+            self.write(e.error)
         except playhouse.UnauthorizedUserException as e:
-            self.write_json(errorcodes.E_INVALID_USERNAME.format(
+            self.write(errorcodes.E_INVALID_USERNAME.format(
                 mac=e.bridge.serial_number, username=e.bridge.username).merge(
                     mac=e.bridge.serial_number, username=e.bridge.username))
         except playhouse.BridgeAlreadyAddedException:
-            self.write_json(errorcodes.E_BRIDGE_ALREADY_ADDED)
+            self.write(errorcodes.E_BRIDGE_ALREADY_ADDED)
         except playhouse.NoBridgeFoundException:
-            self.write_json(errorcodes.E_BRIDGE_NOT_FOUND)
+            self.write(errorcodes.E_BRIDGE_NOT_FOUND)
         except playhouse.NoLinkButtonPressedException:
-            self.write_json(errorcodes.E_NO_LINKBUTTON)
+            self.write(errorcodes.E_NO_LINKBUTTON)
         except playhouse.BulbNotResetException:
-            self.write_json(errorcodes.E_BULB_NOT_RESET)
+            self.write(errorcodes.E_BULB_NOT_RESET)
         except Exception as e: # should not happen
-            self.write_json(errorcodes.E_INTERNAL_ERROR)
+            self.write(errorcodes.E_INTERNAL_ERROR)
             logging.exception("Received an unexpected exception!")
     return new_func
 
@@ -181,7 +176,7 @@ class LightsHandler(BaseHandler):
 
         handle_exceptions((yield GRID.commit()))
 
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
 class LightsAllHandler(BaseHandler):
@@ -192,7 +187,7 @@ class LightsAllHandler(BaseHandler):
         data = self.read_json({"type": "object"})
         yield GRID.set_all(**data)
         yield GRID.commit()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 class BridgesHandler(BaseHandler):
     @error_handler
@@ -214,7 +209,7 @@ class BridgesHandler(BaseHandler):
                 for mac, bridge in GRID.bridges.items()
             }
         }
-        self.write_json(res)
+        self.write(res)
 
 class BridgesAddHandler(BaseHandler):
     @error_handler
@@ -234,7 +229,7 @@ class BridgesAddHandler(BaseHandler):
         bridge = yield GRID.add_bridge(data['ip'], username)
         save_grid_changes()
 
-        self.write_json({
+        self.write({
             "state": "success",
             "bridges": {
                 bridge.serial_number: {
@@ -279,7 +274,7 @@ class BridgesMacHandler(BaseHandler):
 
         yield GRID.bridges[mac].set_username(data['username'])
         save_grid_changes()
-        self.write_json({"state": "success", "username": data['username'],
+        self.write({"state": "success", "username": data['username'],
                          "valid_username": GRID.bridges[mac].logged_in})
 
     @error_handler
@@ -288,7 +283,7 @@ class BridgesMacHandler(BaseHandler):
     def delete(self, mac):
         del GRID.bridges[mac]
         save_grid_changes()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
 class BridgeLightsHandler(BaseHandler):
@@ -314,7 +309,7 @@ class BridgeLightsHandler(BaseHandler):
             light['light']: GRID.bridges[mac].set_state(light['light'], **light['change'])
             for light in data
         })
-        self.write_json({'state': 'success'})
+        self.write({'state': 'success'})
 
 
 class BridgeLightsAllHandler(BaseHandler):
@@ -326,7 +321,7 @@ class BridgeLightsAllHandler(BaseHandler):
         data = self.read_json({"type": "object"})
         yield GRID.bridges[mac].set_group(0, **data)
 
-        self.write_json({'state': 'success'})
+        self.write({'state': 'success'})
 
 
 class BridgeLampSearchHandler(BaseHandler):
@@ -336,7 +331,7 @@ class BridgeLampSearchHandler(BaseHandler):
     @check_mac_exists
     def post(self, mac):
         yield GRID.bridges[mac].search_lights()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 class BridgeResetBulbHandler(BaseHandler):
     @error_handler
@@ -345,7 +340,7 @@ class BridgeResetBulbHandler(BaseHandler):
     @check_mac_exists
     def post(self, mac):
         nwkaddr, pan = yield GRID.bridges[mac].reset_nearby_bulb()
-        self.write_json({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
+        self.write({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
 
 class BridgeAddUserHandler(BaseHandler):
     @error_handler
@@ -367,7 +362,7 @@ class BridgeAddUserHandler(BaseHandler):
         except playhouse.InvalidValueException:
             raise errorcodes.InvalidUserNameException
         save_grid_changes()
-        self.write_json({"state": "success", "username": newname,
+        self.write({"state": "success", "username": newname,
                             "valid_username": bridge.logged_in})
 
 
@@ -418,7 +413,7 @@ class BridgesSearchHandler(BaseHandler):
         tornado.ioloop.IOLoop.current().add_future(playhouse.discover(),
                                                    functools.partial(get_result))
 
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
     @error_handler
@@ -427,7 +422,7 @@ class BridgesSearchHandler(BaseHandler):
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
         else:
-            self.write_json({
+            self.write({
                 "state": "success",
                 "finished": BridgesSearchHandler.last_search,
                 "bridges": {
@@ -464,7 +459,7 @@ class GridHandler(BaseHandler):
         save_grid_changes()
 
         logging.debug("Grid is set to %s", g)
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
     @error_handler
     @authenticated
@@ -472,7 +467,7 @@ class GridHandler(BaseHandler):
         data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
                  for col in row]
                 for row in GRID.grid]
-        self.write_json({"state": "success", "grid": data,
+        self.write({"state": "success", "grid": data,
                          "width": GRID.width, "height": GRID.height})
 
 class DebugHandler(BaseHandler):
@@ -541,7 +536,7 @@ class AuthenticateHandler(BaseHandler):
         if CONFIG['require_password']:
             if data['password'] == CONFIG['password']:
                 self.set_secure_cookie('user', data['username'])
-                self.write_json({"state": "success"})
+                self.write({"state": "success"})
             else:
                 raise errorcodes.InvalidPasswordException
         else:
