@@ -70,7 +70,7 @@ def create_user(bridge):
         try:
             input("Press bridge link button, so that a new user can be created, press enter afterwards:")
             name = yield bridge.create_user("resetutil")
-            break
+            return name
         except playhouse.NoLinkButtonPressedException:
             print("Failed to create user")
             pass
@@ -87,14 +87,22 @@ def enter_num(s):
     return light_num
 
 @tornado.gen.coroutine    
-def reset_lamp():    
+def reset_lamp(): 
+    resets = 0
     while True:
-        try:
-            input("Press enter to perform a reset attempt:")
-            yield bridge.reset_nearby_bulb()
+        print("Plug in a lamp, and enter 'reset' to reset a lamp")
+        print("Enter 'done' when all lamps have been reset")
+        i = input(":")
+        if i == "reset":       
+            try:
+                yield bridge.reset_nearby_bulb()
+                print("Lamp was successfully reset")
+                resets += 1
+            except playhouse.BulbNotResetException:
+                print("Failed to reset lamp")
+        elif i == "done":
             break
-        except playhouse.BulbNotResetException:
-            print("Failed to reset a bulb, trying again...")
+    return reset
     
 @tornado.gen.coroutine
 def do_stuff():
@@ -107,26 +115,21 @@ def do_stuff():
                 
             bridge = yield pick_bridge()
 
-            create_user()
+            name = create_user()
             
-            light_num = enter_num("Enter the number of lights to add to bridge:")
-
-
-
-            print("Plug in each lamp one by one")
-            for i in range(1, light_num + 1):
-                reset_lamp()
-                
-            print("All bulbs reset")
-            input("Plug in all {} reset lamps and press enter:".format(light_num))
-            yield bridge.search_lights()
-            while True:
-                yield tornado.gen.Task(loop.add_timeout, datetime.timedelta(seconds=10))
-                res = yield bridge.get_new_lights()
-                if res['lastscan'] != 'active':
-                    del res['lastscan']
-                    print("Found", len(res), "lights")
-                    break
+            light_num = yield reset_lamp()
+            
+            if light_num != 0:
+                print("All bulbs reset")
+                input("Plug in all {} reset lamps and press enter:".format(light_num))
+                yield bridge.search_lights()
+                while True:
+                    yield tornado.gen.Task(loop.add_timeout, datetime.timedelta(seconds=10))
+                    res = yield bridge.get_new_lights()
+                    if res['lastscan'] != 'active':
+                        del res['lastscan']
+                        print("Found", len(res), "lights")
+                        break
 
             usernames[bridge.serial_number] = name
 
