@@ -19,9 +19,9 @@ def ask_for_y(s):
             break
         if prompt[0] == "n":
             loop.stop()
-            sys.exit()  
-            
-            
+            sys.exit()
+
+
 @tornado.gen.coroutine
 def enter_manual_ip():
     while True:
@@ -31,12 +31,12 @@ def enter_manual_ip():
             print("Using bridge with MAC adress", bridge.serial_number)
             break
         except playhouse.NoBridgeFoundException:
-            print("No bridge found at given adress")      
+            print("No bridge found at given adress")
     return bridge
 
 @tornado.gen.coroutine
 def pick_bridge():
-       
+
     while True:
         print("Beginning search for bridges")
         bridges = yield playhouse.discover()
@@ -57,14 +57,14 @@ def pick_bridge():
                 break
             elif i=="manual":
                 return (yield enter_manual_ip())
-            else:               
+            else:
                 bridge = bridge_map.get(i)
                 if bridge is None:
                     print("No such bridge exists")
                 else:
                     return bridge
-            
-    
+
+
 def create_user(bridge):
     while True:
         try:
@@ -74,7 +74,7 @@ def create_user(bridge):
         except playhouse.NoLinkButtonPressedException:
             print("Failed to create user")
             pass
-            
+
 def enter_num(s):
     light_num = None
     while light_num is None:
@@ -86,7 +86,7 @@ def enter_num(s):
             print("Invalid number, must be a positive integer")
     return light_num
 
-@tornado.gen.coroutine    
+    
 def reset_lamp(): 
     resets = 0
     while True:
@@ -102,17 +102,18 @@ def reset_lamp():
                 print("Failed to reset lamp")
         elif i == "done":
             break
-    return reset
+    return resets
     
+
 @tornado.gen.coroutine
 def do_stuff():
     usernames = {}
     try:
         while True:
             print("Make sure that the bridge is factory-reset")
-  
+
             prompt = ask_for_y("Is it (y/n)?")
-                
+
             bridge = yield pick_bridge()
 
             name = create_user()
@@ -130,6 +131,7 @@ def do_stuff():
                         del res['lastscan']
                         print("Found", len(res), "lights")
                         break
+
 
             usernames[bridge.serial_number] = name
 
@@ -158,6 +160,7 @@ def do_stuff():
 
         loop.stop()
 
-loop = tornado.ioloop.IOLoop.instance()
-loop.add_callback(do_stuff)
-loop.start()
+if __name__ == '__main__':
+    loop = tornado.ioloop.IOLoop.instance()
+    loop.add_callback(do_stuff)
+    loop.start()

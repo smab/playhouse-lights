@@ -19,6 +19,8 @@ import tornado.httpserver
 import tornado.ioloop
 import tornado.web
 
+import jsonschema
+
 import errorcodes
 import playhouse
 
@@ -35,6 +37,7 @@ CONFIG = {
     "port": 4711,
     "require_password": False,
     "password": None,
+    "validate_state_changes": True,
     "ssl": False
 }
 
@@ -69,50 +72,26 @@ class BaseHandler(tornado.web.RequestHandler):
     def get_current_user(self):
         return self.get_secure_cookie("user")
 
-    def read_json(self, jformat=None):
-        def is_valid(data, schema):
-            logging.debug("Testing %s vs %s", repr(data), schema)
-            if type(schema) is dict:
-                # handle optional keys (?-prefixed)
-                all_keys = set(x[1:] if x[0] == '?' else x for x in schema)
-                required_keys = set(x for x in schema if x[0] != '?')
-                schema = {k[1:] if k[0] == '?' else k: v for k, v in schema.items()}
-            # don't even ask
-            valid_format = (type(schema) is list and len(schema) == 1 and type(data) is list and
-                                all(is_valid(d, schema[0]) for d in data)) or \
-                           (type(schema) is list and len(schema) > 1 and type(data) is list and
-                                len(data) == len(schema) and
-                                all(is_valid(a, b) for a, b in zip(data, schema))) or \
-                           (type(schema) is dict and type(data) is dict and
-                                data.keys() <= all_keys and data.keys() >= required_keys and
-                                all(is_valid(data[k], schema[k]) for k in data)) or \
-                           (type(schema) is tuple and any(is_valid(data, a) for a in schema)) or \
-                           (type(schema) is type and type(data) is schema)
-            if valid_format:
-                logging.debug("%s vs %s was valid", repr(data), schema)
-            else:
-                logging.debug("%s vs %s was invalid", repr(data), schema)
-            return valid_format
-
+    def read_json(self, schema=None):
         try:
+            logging.debug("Request is %s", self.request.body)
             data = tornado.escape.json_decode(self.request.body)
             logging.debug("Parsed JSON %s", data)
 
-            if jformat is None or is_valid(data, jformat):
-                return data
-            else:
-                logging.debug("JSON was in an invalid format")
-                raise errorcodes.RequestInvalidFormatException
-
+            if schema is not None:
+                validator = jsonschema.Draft4Validator(
+                    schema, types={"nullablestring": (str, type(None)),
+                                   "nullableobject": (dict, type(None))})
+                validator.validate(data)
+            return data
         except UnicodeDecodeError:
             raise errorcodes.RequestInvalidUnicodeException
         except ValueError:
+            logging.debug("Unable to parse JSON")
             raise errorcodes.RequestInvalidJSONException
-
-    def write_json(self, data):
-        self.set_header("Content-Type", "application/json")
-        logging.debug("Sent response %s", data)
-        self.write(tornado.escape.json_encode(data))
+        except jsonschema.ValidationError:
+            logging.debug("JSON was in an invalid format")
+            raise
 
 
 def authenticated(func):
@@ -133,37 +112,110 @@ def error_handler(func):
             if isinstance(result, tornado.concurrent.Future):
                 yield result
         except errorcodes.LightserverException as e:
-            self.write_json(e.error)
+            self.write(e.error)
+        except jsonschema.ValidationError as e:
+            self.write(errorcodes.E_INVALID_FORMAT.merge(format_error=e.message))
         except playhouse.UnauthorizedUserException as e:
-            self.write_json(errorcodes.E_INVALID_USERNAME.format(
+            self.write(errorcodes.E_INVALID_USERNAME.format(
                 mac=e.bridge.serial_number, username=e.bridge.username).merge(
                     mac=e.bridge.serial_number, username=e.bridge.username))
         except playhouse.BridgeAlreadyAddedException:
-            self.write_json(errorcodes.E_BRIDGE_ALREADY_ADDED)
+            self.write(errorcodes.E_BRIDGE_ALREADY_ADDED)
         except playhouse.NoBridgeFoundException:
-            self.write_json(errorcodes.E_BRIDGE_NOT_FOUND)
+            self.write(errorcodes.E_BRIDGE_NOT_FOUND)
         except playhouse.NoLinkButtonPressedException:
-            self.write_json(errorcodes.E_NO_LINKBUTTON)
+            self.write(errorcodes.E_NO_LINKBUTTON)
         except playhouse.BulbNotResetException:
-            self.write_json(errorcodes.E_BULB_NOT_RESET)
+            self.write(errorcodes.E_BULB_NOT_RESET)
         except Exception as e: # should not happen
-            self.write_json(errorcodes.E_INTERNAL_ERROR)
+            self.write(errorcodes.E_INTERNAL_ERROR)
             logging.exception("Received an unexpected exception!")
     return new_func
+
+
+_CHANGE_SPECIFICATION = {
+    "type": "object",
+    "properties": {
+        "on": { "type": "boolean" },
+        "bri": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+        },
+        "hue": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+        },
+        "sat": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+        },
+        "xy": {
+            "type": "array",
+            "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+            },
+            "maxItems": 2,
+            "minItems": 2
+        },
+        "ct": {
+            "type": "integer",
+            "minimum": 153,
+            "maximum": 500
+        },
+        "rgb": {
+            "type": "array",
+            "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+            },
+            "maxItems": 3,
+            "minItems": 3
+        },
+        "alert": {
+            "enum": ["none", "select", "lselect"]
+        },
+        "effect": {
+            "enum": ["none", "colorloop"]
+        },
+        "transitiontime": {
+            "type": "integer",
+            "minimum": 0
+        }
+    }
+}
 
 class LightsHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json([{"x": int, "y": int, "?delay": (int, float), "change": dict}])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "delay": { "type": "number" },
+                    "change": _CHANGE_SPECIFICATION
+                },
+                "required": ["x", "y", "change"]
+            }
+        })
+
         def handle_exceptions(exceptions):
             # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
-                if type(e) is playhouse.NoBridgeAtCoordinateException:
+                if isinstance(e, playhouse.NoBridgeAtCoordinateException):
                     logging.warning("No bridge added for (%s,%s)", x, y)
                     logging.debug("", exc_info=(type(e), e, e.__traceback__))
-                elif type(e) is playhouse.OutsideGridException:
+                elif isinstance(e, playhouse.OutsideGridException):
                     logging.warning("(%s,%s) is outside grid bounds", x, y)
                     logging.debug("", exc_info=(type(e), e, e.__traceback__))
                 else:
@@ -185,7 +237,7 @@ class LightsHandler(BaseHandler):
 
         handle_exceptions((yield GRID.commit()))
 
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
 class LightsAllHandler(BaseHandler):
@@ -193,10 +245,10 @@ class LightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json(dict)
+        data = self.read_json(_CHANGE_SPECIFICATION)
         yield GRID.set_all(**data)
         yield GRID.commit()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 class BridgesHandler(BaseHandler):
     @error_handler
@@ -218,20 +270,27 @@ class BridgesHandler(BaseHandler):
                 for mac, bridge in GRID.bridges.items()
             }
         }
-        self.write_json(res)
+        self.write(res)
 
 class BridgesAddHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
     def post(self):
-        data = self.read_json({"ip": str, "?username": (str, type(None))})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "ip": { "type": "string" },
+                "username": { "type": "nullablestring" }
+            },
+            "required": ["ip"]
+        })
 
         username = data.get("username", None)
         bridge = yield GRID.add_bridge(data['ip'], username)
         save_grid_changes()
 
-        self.write_json({
+        self.write({
             "state": "success",
             "bridges": {
                 bridge.serial_number: {
@@ -266,10 +325,17 @@ class BridgesMacHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json({"username": (str, type(None))})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "username": { "type": "nullablestring" }
+            },
+            "required": ["username"]
+        })
+
         yield GRID.bridges[mac].set_username(data['username'])
         save_grid_changes()
-        self.write_json({"state": "success", "username": data['username'],
+        self.write({"state": "success", "username": data['username'],
                          "valid_username": GRID.bridges[mac].logged_in})
 
     @error_handler
@@ -278,7 +344,7 @@ class BridgesMacHandler(BaseHandler):
     def delete(self, mac):
         del GRID.bridges[mac]
         save_grid_changes()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
 class BridgeLightsHandler(BaseHandler):
@@ -287,13 +353,24 @@ class BridgeLightsHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json([{"light": int, "change": dict}])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "light": { "type": "integer" },
+                    "change": _CHANGE_SPECIFICATION
+                },
+                "required": ["light", "change"]
+            }
+        })
+
         # TODO: partial error reporting?
         _, errors = yield playhouse.ExceptionCatcher({
             light['light']: GRID.bridges[mac].set_state(light['light'], **light['change'])
             for light in data
         })
-        self.write_json({'state': 'success'})
+        self.write({'state': 'success'})
 
 
 class BridgeLightsAllHandler(BaseHandler):
@@ -302,10 +379,10 @@ class BridgeLightsAllHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json(dict)
+        data = self.read_json(_CHANGE_SPECIFICATION)
         yield GRID.bridges[mac].set_group(0, **data)
 
-        self.write_json({'state': 'success'})
+        self.write({'state': 'success'})
 
 
 class BridgeLampSearchHandler(BaseHandler):
@@ -315,7 +392,7 @@ class BridgeLampSearchHandler(BaseHandler):
     @check_mac_exists
     def post(self, mac):
         yield GRID.bridges[mac].search_lights()
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 class BridgeResetBulbHandler(BaseHandler):
     @error_handler
@@ -324,7 +401,7 @@ class BridgeResetBulbHandler(BaseHandler):
     @check_mac_exists
     def post(self, mac):
         nwkaddr, pan = yield GRID.bridges[mac].reset_nearby_bulb()
-        self.write_json({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
+        self.write({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
 
 class BridgeAddUserHandler(BaseHandler):
     @error_handler
@@ -332,7 +409,12 @@ class BridgeAddUserHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
-        data = self.read_json({"?username": str})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "username": { "type": "string" }
+            }
+        })
         username = data.get("username", None)
 
         bridge = GRID.bridges[mac]
@@ -341,7 +423,7 @@ class BridgeAddUserHandler(BaseHandler):
         except playhouse.InvalidValueException:
             raise errorcodes.InvalidUserNameException
         save_grid_changes()
-        self.write_json({"state": "success", "username": newname,
+        self.write({"state": "success", "username": newname,
                             "valid_username": bridge.logged_in})
 
 
@@ -353,7 +435,13 @@ class BridgesSearchHandler(BaseHandler):
     @error_handler
     @authenticated
     def post(self):
-        data = self.read_json({"auto_add": bool})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "auto_add": { "type": "boolean" }
+            },
+            "required": ["auto_add"]
+        })
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
 
@@ -386,7 +474,7 @@ class BridgesSearchHandler(BaseHandler):
         tornado.ioloop.IOLoop.current().add_future(playhouse.discover(),
                                                    functools.partial(get_result))
 
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
 
     @error_handler
@@ -395,7 +483,7 @@ class BridgesSearchHandler(BaseHandler):
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
         else:
-            self.write_json({
+            self.write({
                 "state": "success",
                 "finished": BridgesSearchHandler.last_search,
                 "bridges": {
@@ -409,7 +497,21 @@ class GridHandler(BaseHandler):
     @error_handler
     @authenticated
     def post(self):
-        data = self.read_json([[({"mac": str, "lamp": int}, type(None))]])
+        data = self.read_json({
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "nullableobject",
+                    "properties": {
+                        "mac": { "type": "string" },
+                        "lamp": { "type": "integer" }
+                    },
+                    "required": ["mac", "lamp"]
+                }
+            }
+        })
+
         g = [[(lamp['mac'], lamp['lamp']) if lamp is not None else None
               for lamp in row]
              for row in data]
@@ -418,7 +520,7 @@ class GridHandler(BaseHandler):
         save_grid_changes()
 
         logging.debug("Grid is set to %s", g)
-        self.write_json({"state": "success"})
+        self.write({"state": "success"})
 
     @error_handler
     @authenticated
@@ -426,7 +528,7 @@ class GridHandler(BaseHandler):
         data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
                  for col in row]
                 for row in GRID.grid]
-        self.write_json({"state": "success", "grid": data,
+        self.write({"state": "success", "grid": data,
                          "width": GRID.width, "height": GRID.height})
 
 class DebugHandler(BaseHandler):
@@ -483,11 +585,19 @@ function send_post(){
 class AuthenticateHandler(BaseHandler):
     @error_handler
     def post(self):
-        data = self.read_json({"password": str, "username": str})
+        data = self.read_json({
+            "type": "object",
+            "properties": {
+                "password": { "type": "string" },
+                "username": { "type": "string" }
+            },
+            "required": ["password", "username"]
+        })
+
         if CONFIG['require_password']:
             if data['password'] == CONFIG['password']:
                 self.set_secure_cookie('user', data['username'])
-                self.write_json({"state": "success"})
+                self.write({"state": "success"})
             else:
                 raise errorcodes.InvalidPasswordException
         else:
@@ -509,9 +619,6 @@ def init_lightgrid():
         with open(BRIDGE_CONFIG_FILE, 'r') as f:
             bridge_config.update(tornado.escape.json_decode(f.read()))
             logging.debug("Configuration was %s", bridge_config)
-
-            bridge_config["grid"] = [[tuple(x) for x in row] for row in bridge_config["grid"]]
-            logging.debug("Constructed grid %s", bridge_config["grid"])
     except (FileNotFoundError, ValueError):
         logging.warning("%s not found or contained invalid JSON, using empty grid",
                         BRIDGE_CONFIG_FILE)
@@ -568,6 +675,10 @@ def init_http():
         logging.warning("%s not found or contained invalid JSON, " \
                         "using default configuration values: %s", CONFIG_FILE, CONFIG)
 
+    if not CONFIG['validate_state_changes']:
+        _CHANGE_SPECIFICATION.clear()
+        _CHANGE_SPECIFICATION['type'] = 'object'
+
     if CONFIG['require_password']:
         logging.info("This instance will require authentication")
     else:
@@ -586,9 +697,10 @@ def init_http():
     http_server.listen(CONFIG['port'])
 
 if __name__ == "__main__":
-    init_lightgrid() # will run when IO loop has started
+    loop = tornado.ioloop.IOLoop.current()
+    loop.run_sync(init_lightgrid)
 
     init_http()
 
     logging.info("Server now listening at port %s", CONFIG['port'])
-    tornado.ioloop.IOLoop.instance().start()
+    loop.start()
