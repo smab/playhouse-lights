@@ -1,4 +1,39 @@
 
+"""This is a REST-inspired API that simplifies communication with Philips Hue bridges.
+
+The API abstracts access to individual bridges by placing each light associated with a bridge
+into a virtual grid, after which lights can be addressed by specifying the ``(x, y)`` coordinate
+of the light in the grid, without having to take into account which bridge the light belongs to.
+
+A number of API methods expect the request body to contain well-formed JSON conforming to
+a certain format which differs between methods. This format is specified using JSON Schema; see
+`the official website <http://json-schema.org/>`_ for more information and
+`Understanding JSON Schema <http://spacetelescope.github.io/understanding-json-schema/>`_ for
+a friendlier introduction.
+
+Responses
+^^^^^^^^^
+
+All responses from the API will be a well-formed JSON object containing at the very least
+a ``state`` property with either the string ``success`` or ``error``. Unless otherwise specified,
+any successful responses will contain only ``{"state": "success"}``.
+
+Failed requests
+^^^^^^^^^^^^^^^
+
+If a request fails, the response will contain an object with the poperty ``state`` set to the
+string ``error``. Additionally the property ``errorcode`` will contain a short string identifying
+the error type, and the property ``errormessage`` a human-readable error message.
+
+.. _authentication:
+
+Authentication
+^^^^^^^^^^^^^^
+
+TODO
+
+"""
+
 if __name__ == "__main__":
     import logging.config
     logging.config.fileConfig('logging.conf')
@@ -72,16 +107,15 @@ class BaseHandler(tornado.web.RequestHandler):
     def get_current_user(self):
         return self.get_secure_cookie("user")
 
-    def read_json(self, schema=None):
+    def read_json(self, schema=None, validator=None):
         try:
             logging.debug("Request is %s", self.request.body)
             data = tornado.escape.json_decode(self.request.body)
             logging.debug("Parsed JSON %s", data)
 
-            if schema is not None:
-                validator = jsonschema.Draft4Validator(
-                    schema, types={"nullablestring": (str, type(None)),
-                                   "nullableobject": (dict, type(None))})
+            if schema is not None and validator is None:
+                jsonschema.validate(data, schema)
+            elif validator is not None:
                 validator.validate(data)
             return data
         except UnicodeDecodeError:
@@ -96,12 +130,12 @@ class BaseHandler(tornado.web.RequestHandler):
 
 def authenticated(func):
     @functools.wraps(func)
-    def new_func(self, *args, **kwargs):
+    def wrapper(self, *args, **kwargs):
         if CONFIG['require_password'] and not self.current_user:
             raise errorcodes.NotLoggedInException
         else:
             return func(self, *args, **kwargs)
-    return new_func
+    return wrapper
 
 def error_handler(func):
     @tornado.gen.coroutine
@@ -132,6 +166,19 @@ def error_handler(func):
             logging.exception("Received an unexpected exception!")
     return new_func
 
+def read_json(schema=None):
+    def decorator(func):
+        if schema is not None:
+            func._json_schema = schema # used by documentation
+
+        jsonschema.Draft4Validator.check_schema(schema)
+        validator = jsonschema.Draft4Validator(schema)
+
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            return func(self, self.read_json(validator=validator), *args, **kwargs)
+        return wrapper
+    return decorator
 
 _CHANGE_SPECIFICATION = {
     "type": "object",
@@ -194,21 +241,47 @@ class LightsHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
-    def post(self):
-        data = self.read_json({
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "x": { "type": "integer" },
-                    "y": { "type": "integer" },
-                    "delay": { "type": "number" },
-                    "change": _CHANGE_SPECIFICATION
-                },
-                "required": ["x", "y", "change"]
-            }
-        })
+    @read_json({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "x": { "type": "integer" },
+                "y": { "type": "integer" },
+                "delay": { "type": "number" },
+                "change": _CHANGE_SPECIFICATION
+            },
+            "required": ["x", "y", "change"]
+        }
+    })
+    def post(self, data):
+        """Change the state of the lights at the given coordinates.
 
+        **Example request**::
+
+            [
+                {
+                    "x": 0,
+                    "y": 2,
+                    "change": {
+                        "hue": 0,
+                        "sat": 255,
+                        "bri": 100
+                    }
+                },
+                {
+                    "x": 1,
+                    "y": 1,
+                    "delay": 0.8,
+                    "change": {
+                        "xy": [0.2, 0.4],
+                        "transitiontime": 10
+                    }
+                }
+            ]
+
+        :request-format:
+        """
         def handle_exceptions(exceptions):
             # TODO: partial error reporting?
             for (x, y), e in exceptions.items():
@@ -244,8 +317,16 @@ class LightsAllHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
-    def post(self):
-        data = self.read_json(_CHANGE_SPECIFICATION)
+    @read_json(_CHANGE_SPECIFICATION)
+    def post(self, data):
+        """Set all lights known by all bridges added to the grid to the same state.
+
+        **Example request**::
+
+            {"on": false}
+
+        :request-format:
+        """
         yield GRID.set_all(**data)
         yield GRID.commit()
         self.write({"state": "success"})
@@ -255,6 +336,72 @@ class BridgesHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     def get(self):
+        """Retrieve a list of all bridges added to the grid.
+
+        :request-format:
+
+        **Example response**::
+
+            {
+                "state": "success",
+                "bridges": {
+                    "cd3facebd076": {
+                        "ip": "192.168.0.101",
+                        "username": null,
+                        "valid_username": false,
+                        "lights": -1
+                    },
+                    "f827aef865ca": {
+                        "ip": "192.168.0.104",
+                        "username": "my-username",
+                        "valid_username": true,
+                        "lights": 3
+                    }
+                }
+            }
+
+        **Successful response format**::
+
+            {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "enum": [
+                            "success"
+                        ]
+                    },
+                    "bridges": {
+                        "type": "object",
+                        "description": "Map of MAC address -> bridge information key/value pairs.",
+                        "patternProperties": {
+                            "[0-9a-f]{12}": {
+                                "type": "object",
+                                "properties": {
+                                    "ip": {
+                                        "type": "string",
+                                        "description": "The IP address of the bridge."
+                                    },
+                                    "username": {
+                                        "type": "string",
+                                        "description": "The username used with the bridge."
+                                    },
+                                    "valid_username": {
+                                        "type": "boolean",
+                                        "description": "Whether the username is valid """ \
+                                            """for use with the bridge."
+                                    },
+                                    "lights": {
+                                        "type": "integer",
+                                        "description": "Number of lights belonging """ \
+                                            """to the bridge. -1 if valid_username is false."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        """
         lights = yield {mac: bridge.get_lights()
                         for mac, bridge in GRID.bridges.items()
                         if bridge.logged_in}
@@ -276,16 +423,91 @@ class BridgesAddHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
-    def post(self):
-        data = self.read_json({
-            "type": "object",
-            "properties": {
-                "ip": { "type": "string" },
-                "username": { "type": "nullablestring" }
-            },
-            "required": ["ip"]
-        })
+    @read_json({
+        "type": "object",
+        "properties": {
+            "ip": { "type": "string" },
+            "username": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "null" },
+                ]
+            }
+        },
+        "required": ["ip"]
+    })
+    def post(self, data):
+        """Add a new bridge with the given IP address and username.
 
+        A username is not required and may be either given as ``null`` or not supplied at all,
+        though without one most actions involving the bridge will fail.
+
+        **Example request**::
+
+            {
+                "ip": "192.168.0.104",
+                "username": "my-username"
+            }
+
+        :request-format:
+
+        **Example response**::
+
+            {
+                "state": "success",
+                "bridges": {
+                    "f827aef865ca": {
+                        "ip": "192.168.0.104",
+                        "username": "my-username",
+                        "valid_username": true,
+                        "lights": 3
+                    }
+                }
+            }
+
+        **Successful response format**::
+
+            {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "enum": [
+                            "success"
+                        ]
+                    },
+                    "bridges": {
+                        "type": "object",
+                        "description": "Map of MAC address -> bridge information key/value pairs.",
+                        "maxProperties": 1,
+                        "patternProperties": {
+                            "[0-9a-f]{12}": {
+                                "type": "object",
+                                "properties": {
+                                    "ip": {
+                                        "type": "string",
+                                        "description": "The IP address of the bridge."
+                                    },
+                                    "username": {
+                                        "type": "string",
+                                        "description": "The username used with the bridge."
+                                    },
+                                    "valid_username": {
+                                        "type": "boolean",
+                                        "description": "Whether the username is valid """ \
+                                            """for use with the bridge."
+                                    },
+                                    "lights": {
+                                        "type": "integer",
+                                        "description": "Number of lights belonging """ \
+                                            """to the bridge. -1 if valid_username is false."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        """
         username = data.get("username", None)
         bridge = yield GRID.add_bridge(data['ip'], username)
         save_grid_changes()
@@ -304,35 +526,72 @@ class BridgesAddHandler(BaseHandler):
 
 def check_mac_exists(func):
     @functools.wraps(func)
-    def new_func_coroutine(self, mac, *args, **kwargs):
+    def wrapper(self, mac, *args, **kwargs):
         if mac not in GRID.bridges:
             raise errorcodes.NoSuchMacException
-
-        yield from func(self, mac, *args, **kwargs)
-
-    @functools.wraps(func)
-    def new_func(self, mac, *args, **kwargs):
-        if mac not in GRID.bridges:
-            raise errorcodes.NoSuchMacException
-
-        func(self, mac, *args, **kwargs)
-
-    return new_func if not inspect.isgeneratorfunction(func) else new_func_coroutine
+        return func(self, mac, *args, **kwargs)
+    return wrapper
 
 class BridgesMacHandler(BaseHandler):
     @error_handler
     @tornado.gen.coroutine
     @authenticated
     @check_mac_exists
-    def post(self, mac):
-        data = self.read_json({
-            "type": "object",
-            "properties": {
-                "username": { "type": "nullablestring" }
-            },
-            "required": ["username"]
-        })
+    @read_json({
+        "type": "object",
+        "properties": {
+            "username": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "null" }
+                ]
+            }
+        },
+        "required": ["username"]
+    })
+    def post(self, data, mac):
+        """Set the username to use for this bridge.
 
+        :param mac: The MAC address of the bridge whose username to change.
+
+        **Example request**::
+
+            {"username": "my-username"}
+
+        :request-format:
+
+        **Example response**::
+
+            {"username": "myusername", "valid_username": true}
+
+        **Successful response format**::
+
+            {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "enum": [
+                            "success"
+                        ]
+                    },
+                    "username": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null",
+                            }
+                        ],
+                        "description": "The new username."
+                    },
+                    "valid_username": {
+                        "type": "boolean",
+                        "description": "Whether the username is valid for use with the bridge."
+                    }
+                }
+            }
+        """
         yield GRID.bridges[mac].set_username(data['username'])
         save_grid_changes()
         self.write({"state": "success", "username": data['username'],
@@ -342,6 +601,12 @@ class BridgesMacHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def delete(self, mac):
+        """Remove this bridge from the grid.
+
+        :param mac: The MAC address of the bridge to remove.
+
+        :request-format:
+        """
         del GRID.bridges[mac]
         save_grid_changes()
         self.write({"state": "success"})
@@ -352,19 +617,50 @@ class BridgeLightsHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     @check_mac_exists
-    def post(self, mac):
-        data = self.read_json({
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "light": { "type": "integer" },
-                    "change": _CHANGE_SPECIFICATION
-                },
-                "required": ["light", "change"]
-            }
-        })
+    @read_json({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "light": { "type": "integer" },
+                "change": _CHANGE_SPECIFICATION
+            },
+            "required": ["light", "change"]
+        }
+    })
+    def post(self, data, mac):
+        """Change the state of the given lights known by this bridge.
 
+        :param mac: The MAC address of the bridge that the lights whose state to change belong to.
+
+        **Example request**::
+
+            [
+                {
+                    "light": 1,
+                    "change": {
+                        "hue": 0,
+                        "sat": 255
+                    }
+                },
+                {
+                    "light": 2,
+                    "change": {
+                        "hue": 21845,
+                        "sat": 255
+                    }
+                },
+                {
+                    "light": 3,
+                    "change": {
+                        "hue": 43690,
+                        "sat": 255
+                    }
+                },
+            ]
+
+        :request-format:
+        """
         # TODO: partial error reporting?
         _, errors = yield playhouse.ExceptionCatcher({
             light['light']: GRID.bridges[mac].set_state(light['light'], **light['change'])
@@ -378,8 +674,18 @@ class BridgeLightsAllHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     @check_mac_exists
-    def post(self, mac):
-        data = self.read_json(_CHANGE_SPECIFICATION)
+    @read_json(_CHANGE_SPECIFICATION)
+    def post(self, data, mac):
+        """Change the state of all lights known by this bridge.
+
+        :param mac: The MAC address of the bridge that the lights whose state to change belong to.
+
+        **Example request**::
+
+            {"alert": "select"}
+
+        :request-format:
+        """
         yield GRID.bridges[mac].set_group(0, **data)
 
         self.write({'state': 'success'})
@@ -391,6 +697,12 @@ class BridgeLampSearchHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
+        """Search for nearby lights for one minute and add them to this bridge.
+
+        :param mac: The MAC address of the bridge that is to commence the search.
+
+        :request-format:
+        """
         yield GRID.bridges[mac].search_lights()
         self.write({"state": "success"})
 
@@ -400,6 +712,17 @@ class BridgeResetBulbHandler(BaseHandler):
     @authenticated
     @check_mac_exists
     def post(self, mac):
+        """Reset a light nearby this bridge.
+
+        This will undo the pairing of the light with the bridge it was previously paired with.
+        The light will become paired with this bridge, however it will not be added automatically
+        to this bridge; :http:post:`/bridges/(?P<mac>[0-9a-f]{12})/lampsearch` must
+        be issued separately.
+
+        :param mac: The bridge to use to perform the reset.
+
+        :request-format:
+        """
         nwkaddr, pan = yield GRID.bridges[mac].reset_nearby_bulb()
         self.write({"state": "success", "nwkaddr": nwkaddr, "pan": pan})
 
@@ -408,13 +731,56 @@ class BridgeAddUserHandler(BaseHandler):
     @tornado.gen.coroutine
     @authenticated
     @check_mac_exists
-    def post(self, mac):
-        data = self.read_json({
-            "type": "object",
-            "properties": {
-                "username": { "type": "string" }
+    @read_json({
+        "type": "object",
+        "properties": {
+            "username": { "type": "string" }
+        }
+    })
+    def post(self, data, mac):
+        """Create a new username for use with this bridge.
+
+        If a username is not supplied, a new one will be generated by the bridge. The link button
+        on the bridge must be pressed prior to issuing a request.
+
+        :param mac: The MAC address of the bridge for which to create the new username.
+
+        **Example request**::
+
+            {}
+
+        :request-format:
+
+        **Example response**::
+
+            {
+                "state": "success",
+                "username": "f321c5d40b3a79eed6adc08eb3997a5e",
+                "valid_username": true
             }
-        })
+
+        **Successful response format**::
+
+            {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "enum": [
+                            "success"
+                        ]
+                    },
+                    "username": {
+                        "type": "string",
+                        "description": "The new username."
+                    },
+                    "valid_username": {
+                        "type": "boolean",
+                        "description": "Whether the username is valid for use with the bridge """ \
+                            """(always true)."
+                    }
+                }
+            }
+        """
         username = data.get("username", None)
 
         bridge = GRID.bridges[mac]
@@ -434,14 +800,29 @@ class BridgesSearchHandler(BaseHandler):
 
     @error_handler
     @authenticated
-    def post(self):
-        data = self.read_json({
-            "type": "object",
-            "properties": {
-                "auto_add": { "type": "boolean" }
-            },
-            "required": ["auto_add"]
-        })
+    @read_json({
+        "type": "object",
+        "properties": {
+            "auto_add": {
+                "type": "boolean",
+                "description": "If true, new bridges are automatically added to the grid."
+            }
+        },
+        "required": ["auto_add"]
+    })
+    def post(self, data):
+        """Search for bridges on the local network.
+
+        Returns immediately and runs the search asynchronously. To see when the search has
+        finished and retrieve the new bridges, issue a request to
+        :http:get:`/bridges/search` periodically.
+
+        **Example request**::
+
+            {"auto_add": true}
+
+        :request-format:
+        """
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
 
@@ -476,10 +857,51 @@ class BridgesSearchHandler(BaseHandler):
 
         self.write({"state": "success"})
 
-
     @error_handler
     @authenticated
     def get(self):
+        """Retrieve bridges found after running :http:post:`/bridges/search`.
+
+        :request-format:
+
+        **Example response**::
+
+            {
+                "state": "success",
+                "finished": 1400776113,
+                "bridges": {
+                    "0fb2a8549ec2": "192.168.0.105",
+                    "92d0d3cdbc7f": "192.168.0.109",
+                    "e2fa9cc7df08": "192.168.0.103"
+                }
+            }
+
+        **Successful response format**::
+
+            {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "enum": [
+                            "success"
+                        ]
+                    },
+                    "finished": {
+                        "type": "integer",
+                        "description": "UNIX timestamp indicating when a search last finished. """ \
+                            """-1 if no search has been issued yet."
+                    },
+                    "bridges": {
+                        "patternProperties": {
+                            "[0-9a-f]{12}": {
+                                "type": "string",
+                                "description": "The IP address of the bridge."
+                            }
+                        }
+                    }
+                }
+            }
+        """
         if BridgesSearchHandler.is_running:
             raise errorcodes.CurrentlySearchingException
         else:
@@ -496,22 +918,53 @@ class BridgesSearchHandler(BaseHandler):
 class GridHandler(BaseHandler):
     @error_handler
     @authenticated
-    def post(self):
-        data = self.read_json({
+    @read_json({
+        "type": "array",
+        "items": {
             "type": "array",
             "items": {
-                "type": "array",
-                "items": {
-                    "type": "nullableobject",
-                    "properties": {
-                        "mac": { "type": "string" },
-                        "lamp": { "type": "integer" }
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "mac": { "type": "string" },
+                            "lamp": { "type": "integer" }
+                        },
+                        "required": ["mac", "lamp"]
                     },
-                    "required": ["mac", "lamp"]
-                }
+                    { "type": "null" }
+                ]
             }
-        })
+        }
+    })
+    def post(self, data):
+        """Set the grid used for ``(x, y)`` coordinate -> light mapping.
 
+        An ``(x, y)`` coordinate will be mapped to the light specified at ``grid[y][x]``.
+        ``null`` values are allowed in the grid.
+
+        **Example request**::
+
+            [
+                [
+                    {"mac": "0fb2a8549ec2", "lamp": 1},
+                    {"mac": "0fb2a8549ec2", "lamp": 3},
+                    {"mac": "0fb2a8549ec2", "lamp": 2}
+                ],
+                [
+                    null,
+                    null,
+                    null
+                ],
+                [
+                    {"mac": "e2fa9cc7df08", "lamp": 1},
+                    {"mac": "e2fa9cc7df08", "lamp": 2},
+                    {"mac": "e2fa9cc7df08", "lamp": 3},
+                ]
+            ]
+
+        :request-format:
+        """
         g = [[(lamp['mac'], lamp['lamp']) if lamp is not None else None
               for lamp in row]
              for row in data]
@@ -525,6 +978,14 @@ class GridHandler(BaseHandler):
     @error_handler
     @authenticated
     def get(self):
+        """Get the current grid used for ``(x, y)`` coordinate -> light mapping.
+
+        :request-format:
+
+        **Example response**: See the example request of :http:post:`/grid`.
+
+        **Successful response format**: See the request format of :http:post:`/grid`.
+        """
         data = [[{"mac": col[0], "lamp": col[1]} if col is not None else None
                  for col in row]
                 for row in GRID.grid]
@@ -584,16 +1045,31 @@ function send_post(){
 
 class AuthenticateHandler(BaseHandler):
     @error_handler
+    @read_json({
+        "type": "object",
+        "properties": {
+            "password": { "type": "string" },
+            "username": { "type": "string" }
+        },
+        "required": ["password", "username"]
+    })
     def post(self):
-        data = self.read_json({
-            "type": "object",
-            "properties": {
-                "password": { "type": "string" },
-                "username": { "type": "string" }
-            },
-            "required": ["password", "username"]
-        })
+        """Authenticate against the server. See :ref:`authentication`.
 
+        If the password was valid, responds with a ``user`` cookie in the ``Set-Cookie``
+        HTTP header, to be used with other requests.
+        The username is currently not taken into account and may be set to any value.
+
+        **Example request**::
+
+            {
+                "password": "mysecretpassword",
+                "username": "myusername"
+            }
+
+        :request-format:
+
+        """
         if CONFIG['require_password']:
             if data['password'] == CONFIG['password']:
                 self.set_secure_cookie('user', data['username'])
@@ -606,6 +1082,10 @@ class AuthenticateHandler(BaseHandler):
 
 class StatusHandler(BaseHandler):
     def get(self):
+        """Always responds with 200 OK. Can be used to tell whether the server is up.
+
+        :request-format:
+        """
         pass
 
 
@@ -640,32 +1120,6 @@ def init_lightgrid():
     logging.info("Finished adding bridges")
 
 def init_http():
-    logging.info("Creating Application object")
-
-    # NOTE: every new instance will have a unique cookie secret,
-    # meaning that cookies created by other instances will be incompatible
-    # with this one
-    # NOTE: make sure to call save_grid_changes from any method that somehow
-    # modifies the LightGrid (adds/removes bridges, changes username, changed the grid, etc)
-    application = tornado.web.Application([
-        (r'/lights', LightsHandler),
-        (r'/lights/all', LightsAllHandler),
-        (r'/bridges', BridgesHandler),
-        (r'/bridges/add', BridgesAddHandler), # POST save_grid_changes
-        (r'/bridges/([0-9a-f]{12})', BridgesMacHandler), # POST/DELETE save_grid_changes
-        (r'/bridges/([0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
-        (r'/bridges/([0-9a-f]{12})/adduser', BridgeAddUserHandler), # POST save_grid_changes
-        (r'/bridges/([0-9a-f]{12})/lights', BridgeLightsHandler),
-        (r'/bridges/([0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
-        (r'/bridges/([0-9a-f]{12})/resetbulb', BridgeResetBulbHandler),
-        (r'/bridges/search', BridgesSearchHandler), # POST save_grid_changes
-        (r'/grid', GridHandler), # POST save_grid_changes
-        (r'/debug', DebugHandler),
-        (r'/authenticate', AuthenticateHandler),
-        (r'/status', StatusHandler),
-    ], cookie_secret=os.urandom(256))
-
-
     logging.info("Reading configuration file (%s)", CONFIG_FILE)
 
     try:
@@ -695,6 +1149,29 @@ def init_http():
         http_server = tornado.httpserver.HTTPServer(application)
 
     http_server.listen(CONFIG['port'])
+
+# NOTE: every new instance will have a unique cookie secret,
+# meaning that cookies created by other instances will be incompatible
+# with this one
+# NOTE: make sure to call save_grid_changes from any method that somehow
+# modifies the LightGrid (adds/removes bridges, changes username, changed the grid, etc)
+application = tornado.web.Application([
+    (r'/lights', LightsHandler),
+    (r'/lights/all', LightsAllHandler),
+    (r'/bridges', BridgesHandler),
+    (r'/bridges/add', BridgesAddHandler), # POST save_grid_changes
+    (r'/bridges/search', BridgesSearchHandler), # POST save_grid_changes
+    (r'/bridges/(?P<mac>[0-9a-f]{12})', BridgesMacHandler), # POST/DELETE save_grid_changes
+    (r'/bridges/(?P<mac>[0-9a-f]{12})/adduser', BridgeAddUserHandler), # POST save_grid_changes
+    (r'/bridges/(?P<mac>[0-9a-f]{12})/lights', BridgeLightsHandler),
+    (r'/bridges/(?P<mac>[0-9a-f]{12})/lights/all', BridgeLightsAllHandler),
+    (r'/bridges/(?P<mac>[0-9a-f]{12})/lampsearch', BridgeLampSearchHandler),
+    (r'/bridges/(?P<mac>[0-9a-f]{12})/resetbulb', BridgeResetBulbHandler),
+    (r'/grid', GridHandler), # POST save_grid_changes
+    (r'/debug', DebugHandler),
+    (r'/authenticate', AuthenticateHandler),
+    (r'/status', StatusHandler),
+], cookie_secret=os.urandom(256))
 
 if __name__ == "__main__":
     loop = tornado.ioloop.IOLoop.current()
