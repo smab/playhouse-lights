@@ -194,7 +194,7 @@ class Bridge:
     Hue bridges communicate through a RESTful JSON API through TCP port 80.
     This class wraps this RESTful interface and provides a Python API for
     convenient Hue bridge operation. The functions for setting the current
-    state of a particular lamp uses the Hue light state names, see
+    state of a particular lamp use the Hue light state names, see
     http://developers.meethue.com/1_lightsapi.html#16_set_light_state for reference.
     """
     ignoredkeys = {"transitiontime", "alert", "effect", "colormode", "reachable"}

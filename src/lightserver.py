@@ -1,5 +1,35 @@
 
-"""This is a REST-inspired API that simplifies communication with Philips Hue bridges.
+"""Insert introduction here
+
+
+.. highlight:: json
+
+Running the server
+------------------
+
+Dependencies
+^^^^^^^^^^^^
+
+python 3, tornado, pycurl, jsonschema,
+
+Setup
+^^^^^
+
+cp config.json.default config.json, ändra grejer, mer info i :ref:`config`.
+
+python src/lightserver.py
+
+Configuration file
+^^^^^^^^^^^^^^^^^^
+
+det är JSON och olika attribut gör olika saker
+
+om authentication true så måste man autha, se :ref:`authentication`.
+
+The API
+-------
+
+This is a REST-inspired API that simplifies communication with Philips Hue bridges.
 
 The API abstracts access to individual bridges by placing each light associated with a bridge
 into a virtual grid, after which lights can be addressed by specifying the ``(x, y)`` coordinate
@@ -31,6 +61,11 @@ Authentication
 ^^^^^^^^^^^^^^
 
 TODO
+
+API methods
+^^^^^^^^^^^
+
+.. autorest:: lightserver:application
 
 """
 
