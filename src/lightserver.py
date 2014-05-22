@@ -30,6 +30,8 @@ cp config.json.default config.json, ändra grejer, mer info i :ref:`config`.
 
 python src/lightserver.py
 
+.. _config:
+
 Configuration file
 ^^^^^^^^^^^^^^^^^^
 
