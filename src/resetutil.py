@@ -1,3 +1,20 @@
+# Playhouse: Making buildings into interactive displays using remotely controllable lights.
+# Copyright (C) 2014  John Eriksson, Arvid Fahlström Myrman, Jonas Höglund,
+#                     Hannes Leskelä, Christian Lidström, Mattias Palo,
+#                     Markus Videll, Tomas Wickman, Emil Öhman.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
 Resetutil is a simple utility for pairing Philips hue bulbs to bridges. It is a command-line utility. It is run simply by executing "python resetutil.py"
@@ -96,14 +113,14 @@ def enter_num(s):
             print("Invalid number, must be a positive integer")
     return light_num
 
-    
-def reset_lamp(): 
+
+def reset_lamp():
     resets = 0
     while True:
         print("Plug in a lamp, and enter 'reset' to reset a lamp")
         print("Enter 'done' when all lamps have been reset")
         i = input(":")
-        if i == "reset":       
+        if i == "reset":
             try:
                 yield bridge.reset_nearby_bulb()
                 print("Lamp was successfully reset")
@@ -113,7 +130,7 @@ def reset_lamp():
         elif i == "done":
             break
     return resets
-    
+
 
 @tornado.gen.coroutine
 def do_stuff():
@@ -127,9 +144,9 @@ def do_stuff():
             bridge = yield pick_bridge()
 
             name = create_user()
-            
+
             light_num = yield reset_lamp()
-            
+
             if light_num != 0:
                 print("All bulbs reset")
                 input("Plug in all {} reset lamps and press enter:".format(light_num))
