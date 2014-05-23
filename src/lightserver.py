@@ -16,10 +16,12 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""
-This is the lamp server component of the Playhouse project.  For API documentation, see [the repository wiki][1].
+"""This is the light server component of the Playhouse project.
 
-The lamp server handles the current lamp grid configuration (with Hue bridges and lights) and the communication between the application (typically the Playhouse web server) and the separate Hue bridges.
+The light server handles the current light grid configuration (with Hue bridges and lights)
+and the communication between the application (typically the Playhouse web server)
+and the separate Hue bridges. It exposes an HTTP API to enable remote control of the
+lights over the network; see :ref:`api`.
 
 .. highlight:: json
 
@@ -38,35 +40,61 @@ Dependencies
 Setup
 ^^^^^
 
-The Hue bridges themselves have no HTTPS support, and the protection against unauthorized commands is very weak. Therefore, it is strongly recommended to set up the Hue bridges in a internal network configured so that they can't communicate with the outside world directly. The Hue bridges communicate through port 80 and 30000, so this can be done by configuring a firewall to restrict access through those ports. The lamp server must then be run within this internal network.
+The Hue bridges themselves have no HTTPS support, and the protection against unauthorized commands
+is very weak. Therefore, it is strongly recommended to set up the Hue bridges in an
+internal network configured so that they cannot communicate with the outside world directly.
+The Hue bridges communicate through port 80 and 30000, so this can be done by configuring
+a firewall to restrict access through those ports.
+The light server must then be run within this internal network.
 
-The lamp server supports HTTPS for communication between itself and the application, and can therefore safely communicate with the outside world if HTTPS is configured and enabled. If HTTPS is not enabled, then anyone can send instructions to the lamp server, so this is not recommended. The standard port for the lamp server is 4711.
+The light server supports HTTPS for communication between itself and the application,
+and can therefore safely communicate with the outside world if HTTPS is configured and enabled.
+Additionally, authentication can be enabled so that a valid password will be required
+in order to send requests to the light server.
 
-The light server set up is a few simple steps::
+The standard port for the light server is 4711.
 
-1. Download all files from the playhouse-lights repository to the computer where the light server will be execute.
-2. If you do not already have a config file, copy the file "config.json.default" and name it "config.json"
-3. Change the configuration file as necessary. The configuration file format is described in the chapter :ref:`config`.
-4. Run the server by executing ``python src/lightserver.py`` from the folder where you just created the configuration file.
+The light server setup is a few simple steps:
+
+1. Download all files from the playhouse-lights repository to the computer where
+   the light server will run. This can be done by running
+   ``git clone https://github.com/smab/playhouse-lights.git``.
+2. If you do not already have a config file, copy the file ``config.json.default``
+   and name it ``config.json``
+3. Change the configuration file as necessary; see :ref:`config`.
+4. Run the server by executing ``python3 src/lightserver.py``
+   from the folder where you just created the configuration file.
 
 .. _config:
 
 Configuration file
 ^^^^^^^^^^^^^^^^^^
 
-The configuration file uses JSON syntax. The configuration itself is a JSON object with various properties, as listed here:
+The configuration file uses JSON syntax.
+The configuration itself is a JSON object with various properties, as listed here:
 
 ============================  ====================  ===========
 Name                          Allowed values        Meaning
 ============================  ====================  ===========
-port                          Integer, 0-65535      Server port number (default 4711).
-password                      Text string           Server password (?).
-require_password              Boolean               If true, this server will require a password (?).
-validate_state_changes        Boolean               If true, this server will validate state changes (?).
-ssl                           Boolean               If true, this server will communicate with the application through a safe HTTPS connection. See :ref:`authentication`.
-certfile                      String, path to file  If SSL is enabled, this file will be used as SSL certificate. See :ref:`authentication`.
-keyfile                       String, path to file  If SSL is enabled, this file will be used as SSL private key. See :ref:`authentication`.
+port                          Integer, 0-65535      Server port number (default: 4711).
+password                      Text string           Server password.
+require_password              Boolean               If true, the server will require a password;
+                                                    see :ref:`authentication`.
+validate_state_changes        Boolean               If true, the server will validate values and
+                                                    parameters when changing the state of lights.
+                                                    Setting this value to false can be useful
+                                                    in cases where the internal validation schema
+                                                    is outdated, though it may lead to unexpected
+                                                    results.
+ssl                           Boolean               If true, the server will communicate with
+                                                    the application using HTTPS.
+certfile                      String, path to file  If SSL is enabled, this file will
+                                                    be used as the SSL certificate.
+keyfile                       String, path to file  If SSL is enabled, this file will
+                                                    be used as the SSL private key.
 ============================  ====================  ===========
+
+.. _api:
 
 The API
 -------
