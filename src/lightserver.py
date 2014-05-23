@@ -267,7 +267,7 @@ _CHANGE_SPECIFICATION = {
             "items": {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 255
             },
             "maxItems": 3,
             "minItems": 3

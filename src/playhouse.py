@@ -278,7 +278,6 @@ class Bridge:
             timeout = self.timeout
         response = yield self.client.fetch("http://{}{}".format(self.ipaddress, url),
                                            method=method, body=body, request_timeout=timeout)
-        logging.debug("Response from bridge: %s", response)
         return response
 
     @tornado.gen.coroutine
@@ -303,11 +302,12 @@ class Bridge:
         elif method in ("POST", "PUT"): # the curl http client doesn't accept body=None for POST/PUT
             body = ''
 
+        logging.debug("Sending %s %s request to %s: %s", method, url, self.ipaddress, body)
         res = yield self.http_request(method, url, body, timeout)
         if res is None:
             return
-
         res = tornado.escape.json_decode(res.body)
+        logging.debug("Got %s %s response from %s: %s", method, url, self.ipaddress, res)
 
         if type(res) is list:
             for item in res:
@@ -355,7 +355,9 @@ class Bridge:
         defs.update(args)
 
         if 'rgb' in defs:
-            defs['xy'] = rgb2xy(*defs['rgb'])
+            hue, sat, lum = rgb_to_hsl(*defs['rgb'])
+            defs['hue'] = int(hue * 65536 / 360)
+            defs['sat'] = sat
             del defs['rgb']
 
         return defs
@@ -1024,34 +1026,26 @@ def parse_description(document):
 
     return ElementTree.ElementTree(root), namespaces
 
-def rgb2xy(red, green, blue):
-    """Converts an RGB colour to XY colour format."""
+# shamelessly stolen from the web server for backwards compatibility reasons
+def rgb_to_hsl(r, g, b):
+    # via http://en.wikipedia.org/wiki/HSL_and_HSV
+    M, m = max(r,g,b), min(r,g,b)
+    c = M - m
 
-    # Apply gamma
-    if red > 0.04045:
-        red = ((red + 0.055) / (1.0 + 0.055))**2.4
-    else:
-        red = red / 12.92
+    if c == 0:
+        hue = 0
+    elif M == r: # ↓ may be <0, so use + and % to make sure that it is in [0,360]
+        hue = ((g - b)/c * 360 + 360*6) % (360 * 6)
+    elif M == g:
+        hue = (b - r)/c * 360 + (360 * 2)
+    elif M == b:
+        hue = (r - g)/c * 360 + (360 * 4)
 
-    if green > 0.04045:
-        green = ((green + 0.055) / (1.0 + 0.055))**2.4
-    else:
-        green = green / 12.92
+    hue /= 6
+    lum = M/2 + m/2
+    divisor = 2 * (lum if lum < 128 else 256 - lum)
+    if divisor == 0:
+        return 0, 0, 0
+    sat = c / divisor * 255
 
-    if blue > 0.04045:
-        blue = ((blue + 0.055) / (1.0 + 0.055))**2.4
-    else:
-        blue = blue / 12.92
-
-    # pylint: disable=invalid-name
-    # Convert to XYZ
-    X = red * 0.649926 + green * 0.103455 + blue * 0.197109
-    Y = red * 0.234327 + green * 0.743075 + blue * 0.022598
-    Z = red * 0.000000 + green * 0.053077 + blue * 1.035763
-
-    # Calculate xy values
-    x = X / (X + Y + Z)
-    y = Y / (X + Y + Z)
-
-    return (x, y)
-
+    return int(hue), int(sat), int(lum)
