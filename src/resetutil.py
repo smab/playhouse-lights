@@ -16,13 +16,18 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""
-Resetutil is a simple utility for pairing Philips hue bulbs to bridges. It is a command-line utility. It is run simply by executing "python resetutil.py"
+"""Resetutil is a simple utility for pairing Philips hue bulbs to bridges.
 
-The program will first attempt to list all available bridges in the network. It will then list all the options and allow you to pick a bridge or write a IP address if the bridge you want to connect to is not in the list.
+It is a command-line utility and can be run by executing ``python3 resetutil.py``.
 
-Once a bridge has been selected, the program will enter a loop where you can reset as many lamps as you want. To reset a lamp, plug it in within 30 centimeters from the bridge, make sure that no other nearby lamps are plugged in and type "reset". When you are done with all lamps, type "done".
+The program will first attempt to list all available bridges in the network.
+It will then list all the options and allow you to pick a bridge or write a IP address
+if the bridge you want to connect to is not in the list.
 
+Once a bridge has been selected, the program will enter a loop where you can reset as many
+lamps as you want. To reset a lamp, plug it in within 30 centimeters from the bridge, make
+sure that no other nearby lamps are plugged in, and type "reset".
+When you are done with all lamps, type "done".
 """
 
 import datetime
@@ -39,14 +44,16 @@ import tornado.stack_context
 
 import playhouse
 
+class _StopError(Exception):
+    pass
+
 def ask_for_y(s):
     while True:
         prompt = input(s)
         if prompt[0] == "y":
             break
         if prompt[0] == "n":
-            loop.stop()
-            sys.exit()
+            raise _StopError
 
 
 @tornado.gen.coroutine
@@ -168,26 +175,27 @@ def do_stuff():
                     break
                 elif prompt == 'n':
                     return
-
+    except _StopError:
+        pass
     except Exception:
         traceback.print_exc()
     finally:
-        print("Write down these MAC addresses and usernames for later use in the web-based "
-            "configuration system, or copy the newly created bridge_setup.json to "
-            "the lamp server's root directory.")
-        print("The usernames are vital in order for the lamp server "
-            "to be able to communicate with the bridges.")
+        if len(usernames) > 0:
+            print("Write down these MAC addresses and usernames for later use in the web-based "
+                "configuration system, or copy the newly created bridge_setup.json to "
+                "the lamp server's root directory.")
+            print("The usernames are vital in order for the lamp server "
+                "to be able to communicate with the bridges.")
 
-        print("{:<16}{}".format("MAC", "username"))
-        print("{:<16}{}".format("---", "--------"))
-        for mac, username in usernames.items():
-            print("{:<16}{}".format(mac, username))
-        with open("bridge_setup.json", 'w') as f:
-            json.dump({"usernames": usernames}, f)
-
-        loop.stop()
+            print("{:<16}{}".format("MAC", "username"))
+            print("{:<16}{}".format("---", "--------"))
+            for mac, username in usernames.items():
+                print("{:<16}{}".format(mac, username))
+            with open("bridge_setup.json", 'w') as f:
+                json.dump({"usernames": usernames}, f)
+        else:
+            print("No bridges were reset.")
 
 if __name__ == '__main__':
     loop = tornado.ioloop.IOLoop.instance()
-    loop.add_callback(do_stuff)
-    loop.start()
+    loop.run_sync(do_stuff)
