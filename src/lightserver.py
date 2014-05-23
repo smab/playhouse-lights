@@ -25,19 +25,31 @@ The Hue bridges themselves have no HTTPS support, and the protection against una
 
 The lamp server supports HTTPS for communication between itself and the application, and can therefore safely communicate with the outside world if HTTPS is configured and enabled. If HTTPS is not enabled, then anyone can send instructions to the lamp server, so this is not recommended. The standard port for the lamp server is 4711.
 
+The light server set up is a few simple steps::
 
-cp config.json.default config.json, ändra grejer, mer info i :ref:`config`.
-
-python src/lightserver.py
+1. Download all files from the playhouse-lights repository to the computer where the light server will be execute.
+2. If you do not already have a config file, copy the file "config.json.default" and name it "config.json"
+3. Change the configuration file as necessary. The configuration file format is described in the chapter :ref:`config`.
+4. Run the server by executing ``python src/lightserver.py`` from the folder where you just created the configuration file.
 
 .. _config:
 
 Configuration file
 ^^^^^^^^^^^^^^^^^^
 
-det är JSON och olika attribut gör olika saker
+The configuration file uses JSON syntax. The configuration itself is a JSON object with various properties, as listed here:
 
-om authentication true så måste man autha, se :ref:`authentication`.
+============================  ====================  ===========
+Name                          Allowed values        Meaning   
+============================  ====================  ===========
+port                          Integer, 0-65535      Server port number (default 4711).
+password                      Text string           Server password (?).
+require_password              Boolean               If true, this server will require a password (?).
+validate_state_changes        Boolean               If true, this server will validate state changes (?).
+ssl                           Boolean               If true, this server will communicate with the application through a safe HTTPS connection. See :ref:`authentication`.
+certfile                      String, path to file  If SSL is enabled, this file will be used as SSL certificate. See :ref:`authentication`.
+keyfile                       String, path to file  If SSL is enabled, this file will be used as SSL private key. See :ref:`authentication`.
+============================  ====================  ===========
 
 The API
 -------
