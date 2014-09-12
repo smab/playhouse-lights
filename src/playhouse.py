@@ -23,7 +23,8 @@ This library exposes the Philips Hue API, normally a JSON API, as an object orie
 These methods require that the `IOLoop <tornado.ioloop.IOLoop>` returned by `tornado.ioloop.IOLoop.current`
 is running in order to function.
 """
-
+import copy
+import colorsys
 import collections
 import datetime
 import errno
@@ -911,6 +912,131 @@ class LightGrid:
 
             except Exception:
                 logging.exception("Encountered exception while pinging bridges")
+                
+default_lamp = {
+    "hue":0, "sat":0, "bri":255, "on":True
+}            
+
+class DummyLightGrid:
+    """Keeps track of several bridges, abstracting access to individual lights."""
+    def __init__(self, width, height, buffered=False, defaults=None):
+        """Initializes the `LightGrid`.
+
+        :param dict usernames: Dictionary of MAC address -> username pairs. When a bridge is
+                               added without specifying a username, and the bridge's MAC address
+                               is present in the ``usernames`` dictionary, the username of the
+                               bridge will automatically be set to the corresponding value
+                               in the dictionary.
+        :param list grid: A list of lists of ``(mac_address, light_id)`` tuples, specifying
+                          a light belonging to a bridge with the given mac address.
+                          Maps ``(x, y)`` coordinates to the light specified at ``grid[y][x]``.
+        :param bool buffered: If `True`, calls to `set_state` will not prompt an immediate
+                              request to the bridge in question; to send the buffered state
+                              changes, call `commit`.
+        :param dict defaults: Additional instructions to include in each state change
+                              request to a bridge.
+        :param bool assert_reachable: If `True`, the grid will occasionally check that all
+                                      bridges are reachable; any unreachable bridge will be removed.
+                                      Setting this parameter to `True` is equivalent to manually
+                                      calling the `assert_reachable` method.
+        """
+        self.defaults = defaults if defaults is not None else {}
+        
+        self.buffered = buffered
+        self._buffer = collections.defaultdict(dict)
+
+        self._lamp_data = [[copy.copy(default_lamp) for w in range(width)] for h in range(height)]
+        self.height = height
+        self.width = width
+
+        self.running = True
+
+    def _state_preprocess(self, args):
+        defs = self.defaults.copy()
+        defs.update(args)
+
+        if 'rgb' in defs:
+            hue, sat, val = colorsys.rgb_to_hsv(*[x/255 for x in defs['rgb']])
+            defs['hue'] = int(hue*65536)
+            defs['sat'] = int(sat*255)
+            defs['bri'] = int(val*255)
+            del defs['rgb']
+
+        return defs
+
+
+    @tornado.gen.coroutine
+    def set_state(self, x, y, **args):
+        # pylint: disable=invalid-name
+        """Set the state for the light at the given coordinate.
+
+        If this grid is buffered, the state will not be sent to the lamp immediately; call
+        `commit` to send the buffered state changes. See :exc:`HueAPIException`.
+
+        :param int x: X coordinate.
+        :param int y: Y coordinate.
+        :param args: State argument, see the Philips Hue documentation.
+        :return: A `tornado.concurrent.Future` that completes when `set_state` has finished.
+        :raises: `tornado.httpclient.HTTPError` if the grid is unbuffered and
+                 the HTTP request failed.
+
+                 `HueAPIException` if the grid is unbuffered and the Hue API returned an error.
+        """
+        args = self._state_preprocess(args)
+        self._buffer[(x, y)].update(args)
+
+        if not self.buffered:
+            exceptions = yield self.commit()
+            if len(exceptions) > 0:
+                # pass on first (and only, since this grid isn't buffered) exception
+                raise next(iter(exceptions.values()))
+
+    @tornado.gen.coroutine
+    def set_all(self, **args):
+        args = self._state_preprocess(args)
+    
+        for x in range(self.width):
+            for y in range(self.height):
+                self._buffer[(x,y)].update(args)
+                
+                
+        return self.commit()
+
+
+    @tornado.gen.coroutine
+    def commit(self):
+        """Commit buffered state changes to the lamps.
+
+        This method is automatically called whenever `set_state` is called if the ``buffered``
+        parameter of `__init__` was set to `False`.
+
+        :return: A `tornado.concurrent.Future` that resolves to a dictionary consisting of
+                 ``(x, y)`` coordinate -> exception object key/value pairs, where a given
+                 exception object is associated with the operation of changing the state
+                 of the light at the corresponding coordinate.
+        :rtype: `dict`
+        :raises: `tornado.httpclient.HTTPError` if the HTTP request failed.
+                 `HueAPIException` if the Hue API returned an error.
+        """
+
+        futures = {}
+        exceptions = {}
+        for (x, y), changes in self._buffer.items():
+            try:
+                if x >= self.width or y >= self.height:
+                    raise OutsideGridException
+
+                self._lamp_data[y][x].update(changes)
+                
+            except OutsideGridException as e:
+                exceptions[(x, y)] = e
+
+        self._buffer.clear()
+
+        return exceptions
+
+
+
 
 
 class AsyncSocket(socket.socket):
