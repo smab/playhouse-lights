@@ -638,7 +638,7 @@ if __name__ == "__main__":
     def update():
         #print("Repaint")
         window.repaint(GRID._lamp_data)
-    io_loop = tornado.ioloop.PeriodicCallback(update,50, loop)
+    io_loop = tornado.ioloop.PeriodicCallback(update,500, loop)
     
     init_http()
     io_loop.start()
