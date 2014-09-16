@@ -531,6 +531,12 @@ class StatusHandler(BaseHandler):
         """
         pass
 
+class LightsDisplayHandler(BaseHandler):
+    @error_handler
+    def get(self):
+        self.write({"state":"success", 
+        "width":GRID.width, "height":GRID.height, 
+        "lamps":GRID._lamp_data})
 
 
 
@@ -577,6 +583,7 @@ application = tornado.web.Application([
     (r'/authenticate', AuthenticateHandler),
     (r'/grid', GridHandler),
     (r'/status', StatusHandler),
+    (r'/lights/display', LightsDisplayHandler),
 ], cookie_secret=os.urandom(256))
 
 class LampWindow:
