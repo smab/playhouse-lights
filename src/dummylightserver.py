@@ -413,6 +413,7 @@ class LightsAllHandler(BaseHandler):
         yield GRID.commit()
         self.write({"state": "success"})
 
+
 class DebugHandler(BaseHandler):
     def get(self):
         website = """
@@ -499,6 +500,27 @@ class AuthenticateHandler(BaseHandler):
                 raise errorcodes.InvalidPasswordException
         else:
             raise errorcodes.AuthNotEnabledException
+            
+class GridHandler(BaseHandler):
+    
+    @error_handler
+    @authenticated
+    def get(self):
+        """Get the current grid used for ``(x, y)`` coordinate -> light mapping.
+
+        :request-format:
+
+        **Example response**: See the example request of :http:post:`/grid`.
+
+        **Successful response format**: See the request format of :http:post:`/grid`.
+        """
+        
+        data = [[{"mac": "0fb2a8549ec2", "lamp": GRID.width*row+col}
+                 for col in range(GRID.width)]
+                for row in range(GRID.height)]
+        self.write({"state": "success", "grid": data,
+                         "width": GRID.width, "height": GRID.height})
+
 
 
 class StatusHandler(BaseHandler):
@@ -553,6 +575,7 @@ application = tornado.web.Application([
     (r'/lights/all', LightsAllHandler),
     (r'/debug', DebugHandler),
     (r'/authenticate', AuthenticateHandler),
+    (r'/grid', GridHandler),
     (r'/status', StatusHandler),
 ], cookie_secret=os.urandom(256))
 
