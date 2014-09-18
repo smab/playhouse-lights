@@ -1285,4 +1285,13 @@ if __name__ == "__main__":
     init_http()
 
     logging.info("Server now listening at port %s", CONFIG['port'])
-    loop.start()
+
+    try: 
+        loop.start()
+    except KeyboardInterrupt: 
+        GRID.set_all(**{"on": False}) # Might not be called before stopping?  
+        loop.stop() 
+        logging.info("Server received interrupt") 
+
+
+
