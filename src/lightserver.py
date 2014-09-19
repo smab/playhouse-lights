@@ -149,6 +149,7 @@ import inspect
 import json
 import logging
 import os
+import signal 
 import time
 import traceback
 
@@ -1285,13 +1286,15 @@ if __name__ == "__main__":
     init_http()
 
     logging.info("Server now listening at port %s", CONFIG['port'])
-
-    try: 
-        loop.start()
-    except KeyboardInterrupt: 
-        GRID.set_all(**{"on": False}) # Might not be called before stopping?  
+    
+    @tornado.gen.coroutine  
+    def on_shutdown(): 
+        logging.info("Server received interrupt, shutting down") 
+        yield GRID.set_all(**{"on": False}) 
         loop.stop() 
-        logging.info("Server received interrupt") 
+
+    signal.signal(signal.SIGINT, lambda sig, frame: loop.add_callback_from_signal(on_shutdown))
+    loop.start()
 
 
 
