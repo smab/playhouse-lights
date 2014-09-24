@@ -259,19 +259,18 @@ class Bridge:
         self.logged_in = False
 
         try:
-            assert (yield self.send_request("GET", "/config",
-                                            force_send=True))['name'] == "Philips hue"
-
-            # assume Philips Hue bridge from here on
-
-            res = yield self.http_request("GET", "/description.xml")
-
-            et, ns = parse_description(res.buffer)
-            self.serial_number = et.find('./default:device/default:serialNumber',
-                                           namespaces=ns).text
-
-        except (ValueError, UnicodeDecodeError, AssertionError, tornado.httpclient.HTTPError):
+            if (yield self.send_request("GET", "/config",
+                                        force_send=True)).get("name", "") != "Philips hue":
+                raise ValueError
+        except (ValueError, UnicodeDecodeError, tornado.httpclient.HTTPError):
             raise NoBridgeFoundException("{}: not a Philips Hue bridge".format(ipaddress))
+
+        # assume Philips Hue bridge from here on
+        res = yield self.http_request("GET", "/description.xml")
+
+        et, ns = parse_description(res.buffer)
+        self.serial_number = et.find('./default:device/default:serialNumber',
+                                        namespaces=ns).text
 
         yield self.update_info()
 
