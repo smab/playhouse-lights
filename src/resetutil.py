@@ -78,8 +78,8 @@ def pick_bridge():
         if len(bridges) != 0:
             print("Found bridges:")
             for b in bridges:
-                bridge_map[bridges.mac] = bridges
-                print(bridges.mac)
+                bridge_map[b.serial_number] = b
+                print(b.serial_number)
             print("Enter the bridge MAC to pick a bridge")
         else:
             print("No bridges found")
@@ -98,7 +98,7 @@ def pick_bridge():
                 else:
                     return bridge
 
-
+@tornado.gen.coroutine
 def create_user(bridge):
     while True:
         try:
@@ -121,7 +121,8 @@ def enter_num(s):
     return light_num
 
 
-def reset_lamp():
+@tornado.gen.coroutine
+def reset_lamp(bridge):
     resets = 0
     while True:
         print("Plug in a lamp, and enter 'reset' to reset a lamp")
@@ -150,9 +151,9 @@ def do_stuff():
 
             bridge = yield pick_bridge()
 
-            name = create_user()
+            name = yield create_user(bridge)
 
-            light_num = yield reset_lamp()
+            light_num = yield reset_lamp(bridge)
 
             if light_num != 0:
                 print("All bulbs reset")
