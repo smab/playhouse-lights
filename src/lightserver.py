@@ -333,6 +333,7 @@ _CHANGE_SPECIFICATION = {
         "alert": {
             "enum": ["none", "select", "lselect"]
         },
+        "blink": { "type": "boolean" },
         "effect": {
             "enum": ["none", "colorloop"]
         },
@@ -713,7 +714,7 @@ class BridgesMacHandler(BaseHandler):
 
         :request-format:
         """
-        del GRID.bridges[mac]
+        GRID.remove_bridge(mac)
         save_grid_changes()
         self.write({"state": "success"})
 

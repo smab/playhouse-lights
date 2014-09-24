@@ -39,6 +39,7 @@ import tornado.concurrent
 import tornado.escape
 import tornado.gen
 import tornado.httpclient
+import tornado.ioloop
 import tornado.iostream
 
 try:
@@ -258,6 +259,9 @@ class Bridge:
 
         self.logged_in = False
 
+        self.blinking_lights = set()
+        self.blinker = tornado.ioloop.PeriodicCallback(self.blink, 30 * 1000)
+
         try:
             if (yield self.send_request("GET", "/config",
                                         force_send=True)).get("name", "") != "Philips hue":
@@ -274,7 +278,18 @@ class Bridge:
 
         yield self.update_info()
 
+        self.blinker.start()
+
         return self
+
+    def deinit(self):
+        self.blinker.stop()
+
+    def blink(self):
+        logging.debug("Running blinker on %s", self.serial_number)
+        for light in self.blinking_lights:
+            logging.debug("Sending alert lselect to light %s on %s", light, self.serial_number)
+            self.set_state(light, alert="lselect")
 
     @tornado.gen.coroutine
     def http_request(self, method, url, body=None, timeout=None):
@@ -368,7 +383,7 @@ class Bridge:
     def _set_state(self, url, args):
         return self.send_request("PUT", url, body=args)
 
-    def _state_preprocess(self, args):
+    def _state_preprocess(self, args, light):
         defs = self.defaults.copy()
         defs.update(args)
 
@@ -377,6 +392,17 @@ class Bridge:
             defs['hue'] = int(hue * 65536 / 360)
             defs['sat'] = sat
             del defs['rgb']
+
+        if 'blink' in defs:
+            if light is None:
+                del defs['blink']
+            else:
+                if defs.pop('blink'):
+                    defs['alert'] = "lselect"
+                    self.blinking_lights.add(light)
+                else:
+                    defs['alert'] = "none"
+                    self.blinking_lights.discard(light)
 
         return defs
 
@@ -393,7 +419,7 @@ class Bridge:
 
                  `HueAPIException` if the Hue API returned an error.
         """
-        args = self._state_preprocess(args)
+        args = self._state_preprocess(args, i)
 
         # Remove unnecessary commands
         state = self.light_data[i]
@@ -424,7 +450,7 @@ class Bridge:
                  `HueAPIException` if the Hue API returned an error.
         """
 
-        args = self._state_preprocess(args)
+        args = self._state_preprocess(args, None)
         keys = self.light_data.keys() if i == 0 else self.groups[i]
         for k, v in args.items():
             if k in self.ignoredkeys:
@@ -895,7 +921,7 @@ class LightGrid:
 
                 for mac in macs_to_remove:
                     logging.error("Removing bridge %s at %s", mac, bridge.ipaddress)
-                    del self.bridges[mac]
+                    self.remove_bridge(mac)
 
                 if len(macs_to_remove) > 0:
                     logging.info("Attempting to find lost bridges")
@@ -911,7 +937,11 @@ class LightGrid:
 
             except Exception:
                 logging.exception("Encountered exception while pinging bridges")
-                
+
+    def remove_bridge(self, mac):
+        self.bridges.pop(mac).deinit()
+
+
 default_lamp = {
     "hue":0, "sat":0, "bri":255, "on":True
 }            
