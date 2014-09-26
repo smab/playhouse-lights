@@ -260,7 +260,7 @@ class Bridge:
         self.logged_in = False
 
         self.blinking_lights = set()
-        self.blinker = tornado.ioloop.PeriodicCallback(self.blink, 30 * 1000)
+        self.blinker = tornado.ioloop.PeriodicCallback(self.blink, 15 * 1000)
 
         try:
             if (yield self.send_request("GET", "/config",
@@ -395,7 +395,9 @@ class Bridge:
 
         if 'blink' in defs:
             if light is None:
-                del defs['blink']
+                if not defs.pop('blink'):
+                    defs['alert'] = "none"
+                    self.blinking_lights.clear()
             else:
                 if defs.pop('blink'):
                     defs['alert'] = "lselect"
